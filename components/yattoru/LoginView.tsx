@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { ScreenShell, ScreenHeader, ScreenCard } from "@/components/yattoru/ScreenLayout";
 import { createClient } from "@/lib/supabase/client";
+import { AUTH_CALLBACK_ROUTE } from "@/lib/routes";
 
 type MagicLinkStatus = "idle" | "sending" | "sent" | "error";
-
-const AUTH_CALLBACK_PATH = "/auth/callback";
+type OAuthProvider = "google" | "apple";
 
 function GoogleIcon() {
   return (
@@ -39,18 +40,46 @@ function AppleIcon() {
   );
 }
 
+function OAuthButton({
+  icon,
+  label,
+  variant,
+  onClick,
+}: {
+  icon: ReactNode;
+  label: string;
+  variant: "light" | "dark";
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        variant === "light"
+          ? "flex h-11 w-full items-center justify-center gap-2 rounded-full border border-neutral-200 bg-white text-sm font-semibold text-neutral-800 transition-colors hover:bg-neutral-50 dark:border-white/15 dark:bg-white/5 dark:text-white dark:hover:bg-white/10"
+          : "flex h-11 w-full items-center justify-center gap-2 rounded-full bg-neutral-900 text-sm font-semibold text-white transition-colors hover:bg-neutral-800 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
+      }
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
 export default function LoginView() {
+  const emailInputId = useId();
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<MagicLinkStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const handleOAuthLogin = async (provider: "google" | "apple") => {
+  const handleOAuthLogin = async (provider: OAuthProvider) => {
     setErrorMessage(null);
     const supabase = createClient();
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        redirectTo: `${window.location.origin}${AUTH_CALLBACK_PATH}`,
+        redirectTo: `${window.location.origin}${AUTH_CALLBACK_ROUTE}`,
       },
     });
     if (error) {
@@ -67,7 +96,7 @@ export default function LoginView() {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: `${window.location.origin}${AUTH_CALLBACK_PATH}`,
+        emailRedirectTo: `${window.location.origin}${AUTH_CALLBACK_ROUTE}`,
       },
     });
 
@@ -81,72 +110,64 @@ export default function LoginView() {
   };
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-neutral-50 to-neutral-100 px-5 py-16 dark:from-neutral-950 dark:to-neutral-900">
-      <div className="w-full max-w-md">
-        <header className="mb-8 text-center">
-          <p className="text-xs font-semibold tracking-[0.2em] text-neutral-400 uppercase dark:text-neutral-600">
-            YATTORU
+    <ScreenShell>
+      <ScreenHeader align="center" title="ログイン" subtitle="今日のタスクを始めましょう。" />
+
+      <ScreenCard>
+        <div className="space-y-3">
+          <OAuthButton
+            icon={<GoogleIcon />}
+            label="Googleで続ける"
+            variant="light"
+            onClick={() => handleOAuthLogin("google")}
+          />
+          <OAuthButton
+            icon={<AppleIcon />}
+            label="Appleで続ける"
+            variant="dark"
+            onClick={() => handleOAuthLogin("apple")}
+          />
+        </div>
+
+        <div className="my-6 flex items-center gap-3">
+          <div className="h-px flex-1 bg-neutral-200 dark:bg-white/10" />
+          <span className="text-xs text-neutral-400">または</span>
+          <div className="h-px flex-1 bg-neutral-200 dark:bg-white/10" />
+        </div>
+
+        {status === "sent" ? (
+          <p
+            role="status"
+            className="rounded-xl bg-neutral-50 px-4 py-3 text-sm text-neutral-600 dark:bg-white/5 dark:text-neutral-300"
+          >
+            {email} にログイン用のリンクを送信しました。メールをご確認ください。
           </p>
-          <h1 className="mt-5 text-2xl font-bold tracking-tight text-neutral-900 sm:text-3xl dark:text-white">
-            ログイン
-          </h1>
-          <p className="mt-2 text-sm text-neutral-500 dark:text-neutral-400">
-            今日のタスクを始めましょう。
+        ) : (
+          <form onSubmit={handleMagicLink} className="space-y-3">
+            <label htmlFor={emailInputId} className="sr-only">
+              メールアドレス
+            </label>
+            <input
+              id={emailInputId}
+              type="email"
+              required
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="メールアドレス"
+              className="h-11 w-full rounded-xl border border-neutral-200 bg-white px-4 text-sm text-neutral-900 outline-none focus:border-neutral-400 dark:border-white/15 dark:bg-white/5 dark:text-white"
+            />
+            <Button type="submit" size="lg" className="w-full" disabled={status === "sending"}>
+              {status === "sending" ? "送信中..." : "ログインリンクを送信"}
+            </Button>
+          </form>
+        )}
+
+        {errorMessage && (
+          <p role="alert" className="mt-4 text-sm text-red-600 dark:text-red-400">
+            {errorMessage}
           </p>
-        </header>
-
-        <section className="rounded-3xl border border-neutral-200/80 bg-white p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_16px_40px_-20px_rgba(15,23,42,0.18)] sm:p-8 dark:border-white/10 dark:bg-neutral-900">
-          <div className="space-y-3">
-            <button
-              type="button"
-              onClick={() => handleOAuthLogin("google")}
-              className="flex h-11 w-full items-center justify-center gap-2 rounded-full border border-neutral-200 bg-white text-sm font-semibold text-neutral-800 transition-colors hover:bg-neutral-50 dark:border-white/15 dark:bg-white/5 dark:text-white dark:hover:bg-white/10"
-            >
-              <GoogleIcon />
-              Googleで続ける
-            </button>
-
-            <button
-              type="button"
-              onClick={() => handleOAuthLogin("apple")}
-              className="flex h-11 w-full items-center justify-center gap-2 rounded-full bg-neutral-900 text-sm font-semibold text-white transition-colors hover:bg-neutral-800 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
-            >
-              <AppleIcon />
-              Appleで続ける
-            </button>
-          </div>
-
-          <div className="my-6 flex items-center gap-3">
-            <div className="h-px flex-1 bg-neutral-200 dark:bg-white/10" />
-            <span className="text-xs text-neutral-400">または</span>
-            <div className="h-px flex-1 bg-neutral-200 dark:bg-white/10" />
-          </div>
-
-          {status === "sent" ? (
-            <p className="rounded-xl bg-neutral-50 px-4 py-3 text-sm text-neutral-600 dark:bg-white/5 dark:text-neutral-300">
-              {email} にログイン用のリンクを送信しました。メールをご確認ください。
-            </p>
-          ) : (
-            <form onSubmit={handleMagicLink} className="space-y-3">
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder="メールアドレス"
-                className="h-11 w-full rounded-xl border border-neutral-200 bg-white px-4 text-sm text-neutral-900 outline-none focus:border-neutral-400 dark:border-white/15 dark:bg-white/5 dark:text-white"
-              />
-              <Button type="submit" size="lg" className="w-full" disabled={status === "sending"}>
-                {status === "sending" ? "送信中..." : "ログインリンクを送信"}
-              </Button>
-            </form>
-          )}
-
-          {errorMessage && (
-            <p className="mt-4 text-sm text-red-600 dark:text-red-400">{errorMessage}</p>
-          )}
-        </section>
-      </div>
-    </main>
+        )}
+      </ScreenCard>
+    </ScreenShell>
   );
 }

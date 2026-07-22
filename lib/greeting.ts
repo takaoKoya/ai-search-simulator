@@ -1,16 +1,15 @@
 export type GreetingPeriod = "morning" | "afternoon" | "evening" | "night";
 
 export interface Greeting {
-  period: GreetingPeriod;
   text: string;
   icon: string;
 }
 
 const GREETINGS: Record<GreetingPeriod, Greeting> = {
-  morning: { period: "morning", text: "おはようございます。", icon: "☀️" },
-  afternoon: { period: "afternoon", text: "こんにちは。", icon: "🌤️" },
-  evening: { period: "evening", text: "こんばんは。", icon: "🌇" },
-  night: { period: "night", text: "こんばんは。", icon: "🌙" },
+  morning: { text: "おはようございます。", icon: "☀️" },
+  afternoon: { text: "こんにちは。", icon: "🌤️" },
+  evening: { text: "こんばんは。", icon: "🌇" },
+  night: { text: "こんばんは。", icon: "🌙" },
 };
 
 export function getGreetingPeriod(hour: number): GreetingPeriod {
