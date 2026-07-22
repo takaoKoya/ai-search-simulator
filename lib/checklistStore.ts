@@ -45,7 +45,8 @@ export function getChecklistServerSnapshot(): ChecklistState {
 }
 
 export function toggleChecklistItem(id: string): void {
-  const next = { ...getState(), [id]: !getState()[id] };
+  const current = getState();
+  const next = { ...current, [id]: !current[id] };
   cachedState = next;
   writeToStorage(next);
   listeners.forEach((listener) => listener());

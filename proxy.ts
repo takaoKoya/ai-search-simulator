@@ -1,8 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { getSupabaseEnv } from "@/lib/supabase/env";
-
-const PROTECTED_PATH_PREFIXES = ["/home", "/task"];
+import { LOGIN_ROUTE } from "@/lib/routes";
 
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -27,12 +26,10 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const isProtectedPath = PROTECTED_PATH_PREFIXES.some((prefix) =>
-    request.nextUrl.pathname.startsWith(prefix)
-  );
-
-  if (isProtectedPath && !user) {
-    return NextResponse.redirect(new URL("/login", request.url));
+  // config.matcher below already scopes this proxy to /home and /task,
+  // so every request reaching here is on a protected path.
+  if (!user) {
+    return NextResponse.redirect(new URL(LOGIN_ROUTE, request.url));
   }
 
   return response;
