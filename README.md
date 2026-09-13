@@ -275,3 +275,166 @@ without ever reaching a human.
   verified via the automated tests above plus a real local Postgres run of the migration
   (schema apply, RLS, trigger/backfill behavior — see `supabase/ER.md`), not a real
   browser session.
+
+### AI Sales Execution — Outreach, Meetings, Proposals, WON/LOST (Phase 4)
+
+Phase 4 takes a lead that reached `READY_FOR_OUTREACH` (Phase 3's terminal state) and
+carries it through Outreach → Send → Reply → Meeting → Proposal/Estimate → Negotiation →
+WON/LOST, ending at the same Contract Workflow Phase 1 already built. **Every external
+action (email send, calendar event, proposal delivery) is a separate, explicit human
+action from the AI-authored content that precedes it** — nothing in this phase sends,
+schedules, or confirms anything on its own.
+
+#### Setup
+
+1. Apply `supabase/migrations/20260917000000_ai_sales_execution_phase4.sql` (after the
+   Phase 3 migration). It extends `opportunities` into the full Sales Pipeline entity,
+   adds `sales_conversations`/`sales_messages`/`meetings`/`proposals`/`estimates`/
+   `service_catalog`/`external_action_logs`, seeds a starter Price Master, and backfills
+   6 new agents for existing tenants.
+2. From a Lead Detail page (`/office/leads/[id]`) whose lead is `READY_FOR_OUTREACH`,
+   open the new **Outreach** tab and click "営業準備を開始".
+
+#### Architecture
+
+- **No real Gmail/Calendar integration exists in this repository** (confirmed by a
+  repo-wide search before writing any code — there is no OAuth client, no
+  `googleapis`/`nodemailer`, nothing). `lib/sales/emailConnector.ts` and
+  `lib/sales/calendarConnector.ts` define `EmailConnector`/`CalendarConnector`
+  interfaces with only a `Simulated*` implementation each — deterministic, no network
+  calls, exactly the same honesty pattern as Phase 1-3's `TemplateProvider` and test
+  fixtures. Wiring a real Gmail OAuth connector and a real Calendar API behind these
+  same interfaces is the primary Phase 5 item.
+- **Sales Outreach Workflow** (`lib/langgraph/graphs/salesOutreachPrep.ts`): Load Lead
+  Research → Select Channel (`lib/sales/channel.ts` — EMAIL only when a contact address
+  actually exists; a `test_mode` lead gets a clearly-synthetic `info@<domain>` test
+  address, never a guessed real one) → Generate structured Draft (subject/opening/
+  personalized observation/problem hypothesis/value proposition/evidence/CTA/signature —
+  never a text blob) → Critic (`lib/sales/outreachCritic.ts`: FACTUAL_ACCURACY/
+  PERSONALIZATION/TONE/LENGTH/CTA/CLAIM_RISK/PRIVACY/BRAND_SAFETY/DUPLICATE_OUTREACH/DNC,
+  capped at 3 revisions) → CEO `sales_send` approval. On approval, a safe
+  **Create External Draft** step runs automatically (`sales_messages.status` →
+  `READY_TO_SEND`); the actual **Final Send Gate**
+  (`POST /api/sales-messages/[id]/send`) is a separate, human-only, role-gated action.
+- **Send idempotency** (spec §12, §73): `sales_messages` has a
+  `unique (tenant_id, idempotency_key)` constraint, and the Final Send Gate does its
+  SENT transition as a single conditional `UPDATE ... WHERE status = 'READY_TO_SEND'` —
+  a concurrent duplicate click loses the race harmlessly and gets back the original send
+  result instead of sending twice (verified against real Postgres).
+- **Reply Monitoring/Classification/Reply Draft** (`lib/langgraph/graphs/replyAnalysis.ts`):
+  since there is no real inbox to poll, a human pastes in a test reply via
+  `POST /api/sales-messages/[id]/simulate-reply` — restricted to `test_mode` messages
+  only. Classification is an explicit, auditable keyword-rule set (never "the model
+  understood it"), and a `DO_NOT_CONTACT` classification **never** gets a reply drafted
+  (spec §18) — it only raises a CEO alert to confirm the DNC registration.
+- **Meeting Conversion**: a `MEETING_REQUEST`/`INTERESTED`/`POSITIVE`/`PRICE_QUESTION`
+  reply creates the `opportunities` row for the first time (this is where a Lead
+  formally becomes an Opportunity, spec §21/§32) — never earlier, and never for a reply
+  that doesn't signal it.
+- **Meeting Scheduling/Prep/Minutes** (`meetingScheduling.ts`/`meetingPrep.ts`/
+  `meetingMinutes.ts`): AI proposes slots (`SimulatedCalendarConnector.proposeSlots`,
+  deterministic, weekday/business-hours only) but never confirms one — a human selects a
+  slot via `POST /api/meetings/[id]/select-time` (role-gated, since spec §0 lists
+  "商談日時確定" as a Human Approval item), which is what actually creates the
+  (simulated) calendar event and logs it to `external_action_logs`. Minutes are
+  extracted from a transcript deterministically; anything not found comes back as the
+  literal `UNKNOWN`/`UNASSIGNED`/`UNSET` — never a guess (spec §30) — and a human must
+  explicitly review (`POST /api/meetings/[id]/minutes/confirm`) before it updates the
+  Opportunity's qualification fields.
+- **Proposal + Estimate** (`lib/langgraph/graphs/proposalDraft.ts`): refuses to generate
+  anything when Goals/Needs/Recommended Services are missing (spec §34) rather than
+  inventing content. Prices always come from `service_catalog` via
+  `lib/sales/pricing.ts`'s `matchCatalogItem`/`buildEstimate` — a recommended service
+  with no catalog match is flagged by the Proposal Critic
+  (`lib/sales/proposalCritic.ts`) rather than silently priced. `evaluateDiscountGuard`
+  computes the manager/CEO/CEO-with-mandatory-reason tier (spec §44) and shows it on the
+  `proposal_approval` CEO approval alongside the (internal-only) margin — this vertical
+  slice routes every tier to the single CEO Inbox (no separate manager-approval queue
+  exists yet, see Known Limitations). Approving a proposal snapshots its linked
+  Estimate into `proposals.price_summary` so a later edit can never retroactively change
+  what was actually sent (spec §37/§50); sending is a separate, role-gated action
+  (`POST /api/proposals/[id]/send`) logged to `external_action_logs`.
+- **Negotiation** (`lib/langgraph/graphs/negotiationAnalysis.ts`): logs the client's
+  reaction (reused as a `findings` row, type `negotiation_item`, rather than a new
+  table) and has the Negotiation Agent lay out discussion points and a suggested
+  discount *ceiling* — it never confirms an actual discount; any real price change goes
+  through a new Estimate + `proposal_approval` cycle.
+- **WON Gate** (`lib/langgraph/graphs/dealWonGate.ts`): only creates the `deal_won` CEO
+  approval once Proposal Sent / Decision Maker / Client Intent Confirmed are all true —
+  otherwise it creates nothing at all, since those are real steps a human still has to
+  complete, not something to approve past. **Approving `deal_won` reuses the exact same
+  `finalizeWonAndStartContract` helper Phase 1's `sales_outreach` approval already used**
+  (extracted as a shared function in `lib/server/approvals.ts`) — the already-built
+  `sales_graph` → `contract_graph` chain runs completely unchanged (spec §55-56).
+- **LOST** (`POST /api/opportunities/[id]/lost`): a plain, role-gated human action (not
+  an AI-authored approval) that records `lost_reason` into `decision_memories` for
+  Decision Learning. `GET /api/sales/lost-analysis` is a plain aggregation over those
+  human-recorded reasons — there is no AI "guessing" involved at all, so spec §58's
+  "separate AI inference from confirmed reasons" requirement is met trivially.
+- **AI Office / CEO Inbox**: `sales_send`/`sales_reply`/`proposal_approval`/`deal_won`
+  are fully wired into the same Approve/Edit&Approve/Reject/Hold/Do Not Contact CEO
+  Inbox flow as `sales_lead` (generalized in `lib/server/approvals.ts` and
+  `components/office/CeoInbox.tsx`, not a parallel system). Lead Detail gained an
+  **Outreach** tab (conversation thread, Send Now, test-reply simulation); a new
+  **Opportunity Detail** page (`/office/opportunities/[id]`) is the hub for
+  Meetings/Proposal-Estimate/Negotiation/Approvals/WON-LOST for everything past Meeting
+  Conversion; the Leads panel shows a compact Sales Pipeline funnel.
+- **Capability-based agent selection** (spec §2): `agents.capabilities` (already existed
+  as an unused jsonb column since Phase 1) is now populated and actually read —
+  `lib/langgraph/context.ts`'s new `getAgentByCapability()` looks an agent up by what it
+  can do (e.g. `"channel_selection"`, `"proposal_draft"`) with a safe fallback code, so
+  headcount/naming for the AI Sales Execution roster stays entirely DB-driven.
+
+#### Tests
+
+Unit tests for every pure function introduced this phase: `emailConnector.test.ts` /
+`calendarConnector.test.ts` (never claim to be real, deterministic), `channel.test.ts`,
+`outreachCritic.test.ts`, `proposalCritic.test.ts`, `pricing.test.ts` (estimate math,
+catalog matching, discount guard). `lib/langgraph/graphs/salesExecution.integration.test.ts`
+runs the entire §94 vertical slice against the fake in-memory Supabase — one
+READY_FOR_OUTREACH lead through Outreach → Send → Reply (Meeting Conversion) →
+Scheduling → Prep → Minutes → Proposal/Estimate → Approval → Send → Negotiation → WON
+Gate → `deal_won` approval → the existing `sales_graph`/`contract_graph` handoff. Two
+real bugs were caught and fixed by these tests during this phase's own development (see
+below).
+
+#### Bugs found and fixed by this phase's own tests
+
+- `checkDuplicate()` (Phase 3) was being called *after* the candidate's own lead row was
+  already inserted, so every domain-having candidate matched itself as an "existing
+  lead." Fixed with an `excludeLeadId` parameter; caught by Phase 3's own
+  `leadDiscovery.integration.test.ts`, carried here as context since it was fixed in
+  this session.
+- `salesOutreachPrep.ts`'s `load_lead_research` node always set `evidenceSourceUrl:
+  null`, so the outreach email's `evidence` array was *always* empty regardless of a
+  real website-staleness finding — every outreach draft failed the Critic's
+  PERSONALIZATION check. Fixed by using the lead's own website URL as the evidence
+  source when a website finding actually produced evidence text; caught by
+  `salesExecution.integration.test.ts`.
+
+#### Known limitations
+
+- No real Gmail/Calendar integration — see Architecture above. This is the single
+  biggest Phase 5 item; until it lands, "send" and "schedule" are simulated end-to-end
+  but never leave this application.
+- Meeting Action Items stay as reviewed structured data on the meeting
+  (`meetings.minutes.actionItems`) rather than becoming real `tasks` rows:
+  `tasks.project_id` is `NOT NULL` and no project exists until WON → Contract →
+  Onboarding creates one. Wiring these into real Tasks once a project exists is a
+  Phase 5 item.
+- Discount Guard tiers (manager/CEO/CEO-with-reason) are computed and shown, but this
+  vertical slice has only one approval queue (CEO Inbox) — there is no separate
+  manager-level approval routing yet.
+- Proposals/Estimates are always created at `version = 1`; re-running
+  `POST /api/opportunities/[id]/proposals` after a Negotiation-driven change creates a
+  new proposal rather than a true v2 with reconciliation against the old version (spec
+  §53). Real version reconciliation is a Phase 5 item.
+- No Proposal/Estimate document generation (PDF/PPT/Word) exists — Proposal/Estimate
+  content is structured data only, viewed in the Opportunity Detail page. `File Security`
+  concerns (spec §75) don't yet apply because there are no files to scope.
+- SLA timers, Follow-up limits/scheduling, and a Business Calendar (spec §66-70) are not
+  implemented — there is no automated reminder or follow-up cadence yet.
+- As with Phases 1-3, no live Supabase project was available in this sandbox — Phase 4
+  is verified via the automated tests above plus a real local Postgres run of the
+  migration (schema apply, RLS, FK/unique-constraint behavior, trigger/backfill — see
+  `supabase/ER.md`), not a real browser session.

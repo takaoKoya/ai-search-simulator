@@ -26,14 +26,22 @@ export interface InboxApproval {
   amount?: number | null;
   urgency?: "CRITICAL" | "HIGH" | "NORMAL" | "LOW";
   salesLeadInfo?: SalesLeadInfo | null;
+  opportunityId?: string | null;
 }
 
 const TYPE_LABEL: Record<string, string> = {
   sales_outreach: "営業承認",
   sales_lead: "Lead承認",
+  sales_send: "送信承認",
+  sales_reply: "返信承認",
+  proposal_approval: "提案・見積承認",
+  deal_won: "受注確定承認",
   contract_approval: "契約承認",
   delivery: "納品承認",
 };
+
+/** Hold/Do Not Contact are valid across every sales-domain approval, not just sales_lead. */
+const HOLD_DNC_TYPES = new Set(["sales_lead", "sales_send", "sales_reply", "proposal_approval", "deal_won"]);
 
 const QUALIFICATION_VAR: Record<string, string> = {
   HOT: "--office-status-failed",
@@ -163,6 +171,17 @@ export default function CeoInbox({
                           詳細を見る
                         </a>
                       )}
+                      {a.opportunityId && (a.type === "proposal_approval" || a.type === "deal_won") && (
+                        <a
+                          href={`/office/opportunities/${a.opportunityId}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="ml-2 underline"
+                          style={{ color: "var(--office-ai-accent)" }}
+                        >
+                          商談詳細を見る
+                        </a>
+                      )}
                     </dd>
                   </div>
                 )}
@@ -248,7 +267,7 @@ export default function CeoInbox({
                 >
                   Reject / Request Revision
                 </button>
-                {a.type === "sales_lead" && (
+                {HOLD_DNC_TYPES.has(a.type) && (
                   <>
                     <button
                       disabled={busyId === a.id}

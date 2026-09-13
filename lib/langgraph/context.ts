@@ -43,6 +43,37 @@ export async function getAgentByCode(ctx: GraphRunCtx, code: string): Promise<Ag
   return agent;
 }
 
+/**
+ * Capability-based agent lookup (spec §2): Phase 4 nodes select an agent by
+ * what it can do rather than a single hardcoded code, so the roster's names
+ * and headcount stay entirely DB-driven. Falls back to `fallbackCode` (an
+ * agent guaranteed to exist, e.g. the shared "sales" coordinator) if no
+ * active agent advertises the capability yet — this never throws, since a
+ * tenant that hasn't customized its roster should still be able to run the
+ * pipeline.
+ */
+export async function getAgentByCapability(ctx: GraphRunCtx, capability: string, fallbackCode: string): Promise<AgentRow> {
+  const cacheKey = `capability:${capability}`;
+  const cached = ctx.agentCache.get(cacheKey);
+  if (cached) return cached;
+
+  const { data, error } = await ctx.supabase
+    .from("agents")
+    .select("id, code, name, role, provider, model, capabilities, is_active")
+    .eq("tenant_id", ctx.tenantId)
+    .eq("is_active", true);
+  if (error) throw error;
+
+  const match = (data ?? []).find((a) => {
+    const capabilities = (a.capabilities as string[] | null) ?? [];
+    return capabilities.includes(capability);
+  });
+
+  const agent = (match as AgentRow | undefined) ?? (await getAgentByCode(ctx, fallbackCode));
+  ctx.agentCache.set(cacheKey, agent);
+  return agent;
+}
+
 export async function setAgentStatus(
   ctx: GraphRunCtx,
   agentId: string,

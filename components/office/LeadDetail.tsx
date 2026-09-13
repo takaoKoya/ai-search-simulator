@@ -41,11 +41,26 @@ const TABS = [
   { key: "website", label: "Website Analysis" },
   { key: "score", label: "Score" },
   { key: "strategy", label: "Sales Strategy" },
+  { key: "outreach", label: "Outreach" },
   { key: "evidence", label: "Evidence" },
   { key: "activity", label: "Activity" },
   { key: "approvals", label: "Approvals" },
   { key: "history", label: "History" },
 ] as const;
+
+const MESSAGE_STATUS_LABEL: Record<string, string> = {
+  DRAFT: "Draft",
+  WAITING_REVIEW: "Critic確認中",
+  WAITING_APPROVAL: "CEO承認待ち",
+  APPROVED: "承認済み",
+  READY_TO_SEND: "送信準備完了",
+  SENT: "送信済み",
+  DELIVERED: "配信済み",
+  REPLIED: "返信あり",
+  FAILED: "送信失敗",
+  BOUNCED: "不達",
+  CANCELLED: "キャンセル",
+};
 type TabKey = (typeof TABS)[number]["key"];
 
 export default function LeadDetail({
@@ -63,6 +78,8 @@ export default function LeadDetail({
   const [reasonFor, setReasonFor] = useState<{ id: string; action: "reject" | "revise" | "do_not_contact" } | null>(null);
   const [reason, setReason] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [preparingOutreach, setPreparingOutreach] = useState(false);
+  const [replyDraftText, setReplyDraftText] = useState<Record<string, string>>({});
   const inFlight = useRef(false);
   const canApprove = role === "owner" || role === "ceo" || role === "admin";
 
@@ -107,6 +124,58 @@ export default function LeadDetail({
     }
   }
 
+  async function prepareOutreach() {
+    setPreparingOutreach(true);
+    try {
+      const res = await fetch(`/api/leads/${leadId}/prepare-outreach`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setToast(body.error ?? "エラーが発生しました");
+        return;
+      }
+      await refresh();
+    } finally {
+      setPreparingOutreach(false);
+    }
+  }
+
+  async function sendMessage(messageId: string) {
+    setBusyId(messageId);
+    try {
+      const res = await fetch(`/api/sales-messages/${messageId}/send`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setToast(body.error ?? "送信に失敗しました");
+        return;
+      }
+      await refresh();
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function simulateReply(messageId: string) {
+    const replyText = (replyDraftText[messageId] ?? "").trim();
+    if (!replyText) return;
+    setBusyId(messageId);
+    try {
+      const res = await fetch(`/api/sales-messages/${messageId}/simulate-reply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ replyText }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setToast(body.error ?? "エラーが発生しました");
+        return;
+      }
+      setReplyDraftText((prev) => ({ ...prev, [messageId]: "" }));
+      await refresh();
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   const { scores, latestScore, latestHypothesis } = state;
   const lead = state.lead as Record<string, unknown>;
   const findings = state.findings as Array<{ id: string; type: string; payload: Record<string, unknown>; created_at: string }>;
@@ -130,6 +199,20 @@ export default function LeadDetail({
   const decisionMemories = state.decisionMemories as Array<{ id: string; category: string; note: string | null; rule_candidate: boolean; created_at: string }>;
   const workflowRuns = state.workflowRuns as Array<{ id: string; graph_name: string; status: string; current_node: string | null; created_at: string }>;
   const drafts = state.drafts as Array<{ id: string; channel: string; status: string; subject: string | null; body: string; created_at: string }>;
+  const messages = state.messages as Array<{
+    id: string;
+    direction: "OUTBOUND" | "INBOUND";
+    channel: string;
+    status: string;
+    subject: string | null;
+    to_address: string | null;
+    body: string | null;
+    reply_classification: string | null;
+    reply_priority: string | null;
+    test_mode: boolean;
+    created_at: string;
+  }>;
+  const opportunities = state.opportunities as Array<{ id: string; stage: string; status: string }>;
 
   const researchFindings = findings.filter((f) => f.type === "company_research");
   const websiteFindings = findings.filter((f) => f.type === "website_diagnosis_lite");
@@ -326,6 +409,106 @@ export default function LeadDetail({
                   ※ このDraftは自動送信されません。送信するにはCEO承認後に人手で行う必要があります（External Send Gate）。
                 </p>
               </div>
+            )}
+          </Section>
+        )}
+
+        {tab === "outreach" && (
+          <Section title="Outreach">
+            {opportunities.length > 0 && (
+              <p className="mb-3 text-[11px]" style={{ color: "var(--office-ai-accent)" }}>
+                商談化済み:{" "}
+                <a href={`/office/opportunities/${opportunities[0].id}`} target="_blank" rel="noreferrer" className="underline">
+                  Opportunity詳細を見る
+                </a>{" "}
+                (stage: {opportunities[0].stage})
+              </p>
+            )}
+
+            {lead.discovery_stage === "READY_FOR_OUTREACH" && messages.length === 0 && (
+              <button
+                disabled={preparingOutreach}
+                onClick={prepareOutreach}
+                className="rounded-lg px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
+                style={{ background: "var(--office-ai-accent)" }}
+              >
+                営業準備を開始（Sales Outreach Workflow）
+              </button>
+            )}
+
+            {messages.length === 0 ? (
+              <EmptyState message="まだ営業メールのやり取りはありません。" />
+            ) : (
+              <ul className="space-y-3 text-[12px]">
+                {messages.map((m) => (
+                  <li
+                    key={m.id}
+                    className="rounded-lg border p-3"
+                    style={{
+                      borderColor: "var(--office-border)",
+                      background: m.direction === "INBOUND" ? "color-mix(in srgb, var(--office-ai-accent) 8%, transparent)" : "var(--office-bg-primary)",
+                    }}
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ color: "var(--office-text-muted)" }}>
+                        {m.direction === "INBOUND" ? "受信" : "送信"} / {m.channel}
+                      </span>
+                      <span style={{ color: "var(--office-text-secondary)" }}>{MESSAGE_STATUS_LABEL[m.status] ?? m.status}</span>
+                      {m.test_mode && (
+                        <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ color: "var(--office-status-warning)" }}>
+                          TEST
+                        </span>
+                      )}
+                      {m.reply_classification && (
+                        <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ color: "var(--office-ai-accent)" }}>
+                          {m.reply_classification} ({m.reply_priority})
+                        </span>
+                      )}
+                      <span className="ml-auto" style={{ color: "var(--office-text-muted)" }}>
+                        {new Date(m.created_at).toLocaleString("ja-JP")}
+                      </span>
+                    </div>
+                    {m.subject && <p className="mt-1 font-semibold">{m.subject}</p>}
+                    {m.to_address && (
+                      <p style={{ color: "var(--office-text-muted)" }}>宛先: {m.to_address}</p>
+                    )}
+                    {m.body && <p className="mt-1 whitespace-pre-line" style={{ color: "var(--office-text-secondary)" }}>{m.body}</p>}
+
+                    {m.direction === "OUTBOUND" && m.status === "READY_TO_SEND" && (
+                      <button
+                        disabled={busyId === m.id}
+                        onClick={() => sendMessage(m.id)}
+                        className="mt-2 rounded-lg px-3 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
+                        style={{ background: "var(--office-status-failed)" }}
+                      >
+                        Send Now（実際に送信します）
+                      </button>
+                    )}
+
+                    {m.direction === "OUTBOUND" && m.status === "SENT" && m.test_mode && (
+                      <div className="mt-2 space-y-1.5 rounded-md border p-2" style={{ borderColor: "var(--office-border)" }}>
+                        <p style={{ color: "var(--office-text-muted)" }}>テスト返信をシミュレート（Test Modeのみ）:</p>
+                        <textarea
+                          value={replyDraftText[m.id] ?? ""}
+                          onChange={(e) => setReplyDraftText((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                          rows={2}
+                          className="w-full rounded-md border p-1.5 text-[11px]"
+                          style={{ borderColor: "var(--office-border)", background: "var(--office-surface)" }}
+                          placeholder="例: ご連絡ありがとうございます。一度お話を伺いたいです。商談の日程を相談できますか？"
+                        />
+                        <button
+                          disabled={busyId === m.id || !(replyDraftText[m.id] ?? "").trim()}
+                          onClick={() => simulateReply(m.id)}
+                          className="rounded-md px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
+                          style={{ background: "var(--office-ai-accent)" }}
+                        >
+                          テスト返信を送る
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
             )}
           </Section>
         )}

@@ -27,6 +27,8 @@ export async function getOfficeState(ctx: TenantContext) {
     contractsRes,
     leadScoresRes,
     leadHypothesesRes,
+    salesMessagesRes,
+    proposalsRes,
   ] = await Promise.all([
     supabase.from("departments").select("id, code, name, sort_order").eq("tenant_id", tenantId).order("sort_order"),
     supabase
@@ -78,7 +80,7 @@ export async function getOfficeState(ctx: TenantContext) {
       .select("id, company_name, industry, status, score, created_at")
       .eq("tenant_id", tenantId)
       .order("created_at", { ascending: false }),
-    supabase.from("opportunities").select("id, lead_id, amount, currency").eq("tenant_id", tenantId),
+    supabase.from("opportunities").select("id, lead_id, amount, currency, estimated_value, confirmed_value, stage").eq("tenant_id", tenantId),
     supabase.from("contracts").select("id, opportunity_id").eq("tenant_id", tenantId),
     supabase
       .from("lead_scores")
@@ -90,6 +92,8 @@ export async function getOfficeState(ctx: TenantContext) {
       .select("lead_id, recommended_services, estimated_initial_value, estimated_monthly_value, why_now, created_at")
       .eq("tenant_id", tenantId)
       .order("created_at", { ascending: false }),
+    supabase.from("sales_messages").select("id, lead_id, subject, to_address, channel, direction").eq("tenant_id", tenantId),
+    supabase.from("proposals").select("id, opportunity_id, title").eq("tenant_id", tenantId),
   ]);
 
   for (const res of [
@@ -108,6 +112,8 @@ export async function getOfficeState(ctx: TenantContext) {
     contractsRes,
     leadScoresRes,
     leadHypothesesRes,
+    salesMessagesRes,
+    proposalsRes,
   ]) {
     if (res.error) throw res.error;
   }
@@ -181,9 +187,13 @@ export async function getOfficeState(ctx: TenantContext) {
     }
   }
 
+  const salesMessageById = new Map((salesMessagesRes.data ?? []).map((m) => [m.id as string, m]));
+  const proposalById = new Map((proposalsRes.data ?? []).map((p) => [p.id as string, p]));
+
   const approvals = rawApprovals.map((a) => {
     let subjectLabel: string | null = null;
     let amount: number | null = null;
+    let opportunityId: string | null = null;
     let salesLeadInfo: {
       score: number | null;
       qualification: string | null;
@@ -216,6 +226,22 @@ export async function getOfficeState(ctx: TenantContext) {
       amount = oppId ? ((opportunities.find((o) => o.id === oppId)?.amount as number | undefined) ?? null) : null;
     } else if (a.type === "delivery") {
       subjectLabel = projectNameBySubjectId.get(a.subject_id as string) ?? null;
+    } else if (a.type === "sales_send" || a.type === "sales_reply") {
+      const message = salesMessageById.get(a.subject_id as string);
+      const leadId = message?.lead_id as string | undefined;
+      const company = leadId ? (leads.find((l) => l.id === leadId)?.company_name ?? null) : null;
+      subjectLabel = company ? `${company}${message?.direction === "INBOUND" ? "（返信通知）" : ""}` : null;
+    } else if (a.type === "proposal_approval") {
+      const proposal = proposalById.get(a.subject_id as string);
+      const oppId = (proposal?.opportunity_id as string | undefined) ?? null;
+      opportunityId = oppId;
+      subjectLabel = oppId ? (leadNameByOpportunityId.get(oppId) ?? null) : null;
+      amount = oppId ? ((opportunities.find((o) => o.id === oppId)?.estimated_value as number | undefined) ?? null) : null;
+    } else if (a.type === "deal_won") {
+      opportunityId = a.subject_id as string;
+      subjectLabel = leadNameByOpportunityId.get(a.subject_id as string) ?? null;
+      const opp = opportunities.find((o) => o.id === a.subject_id);
+      amount = (opp?.confirmed_value as number | undefined) ?? (opp?.estimated_value as number | undefined) ?? (opp?.amount as number | undefined) ?? null;
     }
 
     const ageHours = (Date.now() - new Date(a.created_at as string).getTime()) / 3_600_000;
@@ -226,7 +252,7 @@ export async function getOfficeState(ctx: TenantContext) {
     else if (risk === "MEDIUM" || ageHours > 8) urgency = "NORMAL";
     else urgency = "LOW";
 
-    return { ...a, subjectLabel, amount, urgency, salesLeadInfo };
+    return { ...a, subjectLabel, amount, urgency, salesLeadInfo, opportunityId };
   });
 
   const agentToDepartmentId = new Map(assignments.map((a) => [a.agent_id as string, a.department_id as string]));
@@ -287,6 +313,14 @@ export async function getOfficeState(ctx: TenantContext) {
     projects: projectProgress,
     tasks,
     leads,
+    opportunities: opportunities.map((o) => ({
+      id: o.id as string,
+      leadId: o.lead_id as string,
+      companyName: leads.find((l) => l.id === o.lead_id)?.company_name ?? null,
+      stage: o.stage as string,
+      estimatedValue: (o.estimated_value as number | null) ?? null,
+      confirmedValue: (o.confirmed_value as number | null) ?? null,
+    })),
     ceoSummary: buildCeoSummary(pendingApprovals, decidedApprovals),
   };
 }
@@ -294,6 +328,10 @@ export async function getOfficeState(ctx: TenantContext) {
 const APPROVAL_TYPE_LABEL: Record<string, string> = {
   sales_outreach: "営業承認",
   sales_lead: "Lead承認",
+  sales_send: "送信承認",
+  sales_reply: "返信承認",
+  proposal_approval: "提案・見積承認",
+  deal_won: "受注確定承認",
   contract_approval: "契約承認",
   delivery: "納品承認",
 };

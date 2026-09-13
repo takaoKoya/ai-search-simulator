@@ -20,7 +20,14 @@ export type AgentTaskType =
   | "critic_review"
   | "qa_check"
   | "execution_task"
-  | "report";
+  | "report"
+  | "sales_outreach_email"
+  | "reply_classification"
+  | "reply_draft"
+  | "meeting_prep"
+  | "meeting_minutes"
+  | "proposal_draft"
+  | "negotiation_analysis";
 
 export interface AgentTaskContext {
   [key: string]: unknown;
@@ -80,6 +87,20 @@ export class TemplateProvider implements AIProvider {
         return this.executionTask(context);
       case "report":
         return this.report(context);
+      case "sales_outreach_email":
+        return this.salesOutreachEmail(context);
+      case "reply_classification":
+        return this.replyClassification(context);
+      case "reply_draft":
+        return this.replyDraft(context);
+      case "meeting_prep":
+        return this.meetingPrep(context);
+      case "meeting_minutes":
+        return this.meetingMinutes(context);
+      case "proposal_draft":
+        return this.proposalDraft(context);
+      case "negotiation_analysis":
+        return this.negotiationAnalysis(context);
       default:
         throw new Error(`Unsupported task type: ${taskType satisfies never}`);
     }
@@ -314,6 +335,308 @@ export class TemplateProvider implements AIProvider {
     return {
       summary: `${projectName}の月次レポートを作成しました。`,
       data: { highlights: ["KPI進捗を集計", "次月アクションを提案"] },
+    };
+  }
+
+  /**
+   * Structured first-touch outreach email (spec §6-8) — never a plain text
+   * blob. `evidence` is only populated when the caller supplies a real
+   * source (a `findings` row); with none, the personalization line stays
+   * generic rather than inventing a source (spec §8).
+   */
+  private salesOutreachEmail(context: AgentTaskContext): AgentTaskResult {
+    const companyName = String(context.companyName ?? "対象企業");
+    const recipientName = (context.recipientName as string | null) ?? null;
+    const observedProblem = String(context.observedProblem ?? "貴社のWeb活用状況");
+    const recommendedServices = (context.recommendedServices as Array<{ service: string; reason: string }> | undefined) ?? [];
+    const whyNow = String(context.whyNow ?? "");
+    const evidenceSourceUrl = (context.evidenceSourceUrl as string | null) ?? null;
+    const evidenceCapturedAt = (context.evidenceCapturedAt as string | null) ?? null;
+    const evidenceText = (context.evidenceText as string | null) ?? null;
+    const primaryService = recommendedServices[0]?.service ?? "Web改善";
+
+    const evidence = evidenceSourceUrl && evidenceText ? [{ sourceUrl: evidenceSourceUrl, capturedAt: evidenceCapturedAt, evidence: evidenceText }] : [];
+    const personalizedObservation =
+      evidence.length > 0
+        ? `${evidenceText}という点を拝見しました。`
+        : `貴社のWebサイトを拝見し、${observedProblem}という点に着目いたしました。`;
+
+    const subject = `${companyName}様へ：${primaryService}に関するご相談`;
+    const opening = recipientName ? `${companyName} ${recipientName}様` : `${companyName} ご担当者様`;
+    const problemHypothesis = observedProblem;
+    const valueProposition = `弊社では${primaryService}を中心に、同様の課題を抱える企業様のご支援を行っております。${whyNow ? whyNow + "。" : ""}`;
+    const cta = "よろしければ15分ほどお時間をいただき、貴社の状況に合わせた改善余地について簡単にご説明させてください。";
+    const signature = "営業担当";
+
+    const body = [
+      opening,
+      "",
+      "初めてご連絡いたします。",
+      personalizedObservation,
+      valueProposition,
+      "",
+      cta,
+      "",
+      "ご検討のほど、よろしくお願いいたします。",
+      signature,
+    ].join("\n");
+
+    return {
+      summary: `${companyName}向けの営業メールDraftを作成しました（送信はしていません）。`,
+      data: { subject, opening, personalizedObservation, problemHypothesis, valueProposition, evidence, cta, signature, body },
+    };
+  }
+
+  /**
+   * Deterministic keyword-rule reply classification (spec §16) — not a
+   * model "understanding" the email, an explicit, auditable rule set so a
+   * CEO can see exactly why a reply was bucketed a given way.
+   */
+  private replyClassification(context: AgentTaskContext): AgentTaskResult {
+    const text = String(context.replyText ?? "");
+    const rules: Array<{ pattern: RegExp; classification: string; confidence: number }> = [
+      { pattern: /今後.{0,4}(連絡|営業).{0,4}(しない|不要|お控え)|配信停止|二度と連絡/, classification: "DO_NOT_CONTACT", confidence: 0.95 },
+      { pattern: /mailer-daemon|delivery.{0,3}failed|宛先不明|届きません/i, classification: "BOUNCE", confidence: 0.9 },
+      { pattern: /out of office|automatic reply|自動返信|不在のため/i, classification: "AUTO_REPLY", confidence: 0.9 },
+      { pattern: /商談|打ち合わせ|お打合せ|日程|ミーティング|お時間.{0,4}(いただけ|頂け)/, classification: "MEETING_REQUEST", confidence: 0.85 },
+      { pattern: /料金|価格|見積|費用/, classification: "PRICE_QUESTION", confidence: 0.8 },
+      { pattern: /他部署|担当ではない|紹介いたします|紹介します/, classification: "REFERRAL", confidence: 0.75 },
+      { pattern: /不要|お断り|結構です|興味(が)?ありません|必要ありません/, classification: "NOT_INTERESTED", confidence: 0.85 },
+      { pattern: /興味|詳しく|関心があります/, classification: "INTERESTED", confidence: 0.75 },
+      { pattern: /検討|前向き|良さそう/, classification: "POSITIVE", confidence: 0.6 },
+      { pattern: /今は|現在は|タイミング|後日|来期/, classification: "NOT_NOW", confidence: 0.6 },
+      { pattern: /\?|？|教えてください|でしょうか/, classification: "QUESTION", confidence: 0.5 },
+    ];
+    const match = rules.find((r) => r.pattern.test(text));
+    const classification = match?.classification ?? "UNKNOWN";
+    const confidence = match?.confidence ?? 0.3;
+    return {
+      summary: `返信を${classification}に分類しました（確信度${Math.round(confidence * 100)}%）。`,
+      data: { classification, confidence },
+    };
+  }
+
+  private replyDraft(context: AgentTaskContext): AgentTaskResult {
+    const companyName = String(context.companyName ?? "対象企業");
+    const classification = String(context.classification ?? "UNKNOWN");
+    const replyText = String(context.replyText ?? "");
+    const recommendedServices = (context.recommendedServices as Array<{ service: string; reason: string }> | undefined) ?? [];
+    const primaryService = recommendedServices[0]?.service ?? "Web改善";
+
+    const intentByClass: Record<string, string> = {
+      MEETING_REQUEST: "商談の日程調整を希望している",
+      INTERESTED: "サービス内容に関心を示している",
+      PRICE_QUESTION: "料金・見積を知りたがっている",
+      POSITIVE: "前向きな反応を示している",
+      QUESTION: "追加の質問をしている",
+      NOT_NOW: "現時点では検討タイミングではない",
+      REFERRAL: "担当者の紹介を提案している",
+      NOT_INTERESTED: "関心がない意思を示している",
+      DO_NOT_CONTACT: "今後の連絡を拒否している",
+      AUTO_REPLY: "自動応答メールである",
+      BOUNCE: "メールが届いていない可能性がある",
+      UNKNOWN: "意図が明確に読み取れない",
+    };
+    const actionByClass: Record<string, string> = {
+      MEETING_REQUEST: "商談候補日時を提示する",
+      INTERESTED: "資料と商談の提案を行う",
+      PRICE_QUESTION: "概算レンジを提示し商談へ誘導する",
+      POSITIVE: "次のアクション（商談）を提案する",
+      QUESTION: "質問へ回答し関係を継続する",
+      NOT_NOW: "Follow-up候補日を設定し様子を見る",
+      REFERRAL: "紹介先へのアプローチ許可を確認する",
+      NOT_INTERESTED: "丁寧にお礼を伝え、無理に再営業しない",
+      DO_NOT_CONTACT: "Do Not Contactへ登録し、以後連絡しない",
+      AUTO_REPLY: "後日の再送信タイミングを設定する",
+      BOUNCE: "宛先の再確認を行う",
+      UNKNOWN: "人間が内容を確認してから対応する",
+    };
+    const opportunitySignal = ["MEETING_REQUEST", "INTERESTED", "POSITIVE", "PRICE_QUESTION"].includes(classification);
+    const risk = classification === "DO_NOT_CONTACT" ? "再営業すると信頼を損なうリスクが高い" : null;
+
+    const draftSubject = `Re: ${companyName}様よりのご返信`;
+    const draftBody =
+      classification === "DO_NOT_CONTACT"
+        ? null // never draft a reply to someone who asked not to be contacted (spec §18)
+        : [
+            `${companyName} ご担当者様`,
+            "",
+            "ご返信いただきありがとうございます。",
+            classification === "MEETING_REQUEST"
+              ? "商談の候補日時を追ってご連絡いたします。"
+              : `${primaryService}について、貴社の状況に合わせてご説明させていただければと存じます。`,
+            "",
+            "よろしくお願いいたします。",
+          ].join("\n");
+
+    return {
+      summary: `${companyName}への返信案を作成しました（${intentByClass[classification]}）。`,
+      data: {
+        intent: intentByClass[classification] ?? intentByClass.UNKNOWN,
+        keyPoints: replyText.length > 0 ? [replyText.slice(0, 120)] : [],
+        questions: classification === "QUESTION" ? [replyText.slice(0, 200)] : [],
+        opportunitySignal,
+        risk,
+        recommendedAction: actionByClass[classification] ?? actionByClass.UNKNOWN,
+        draftSubject,
+        draftBody,
+      },
+    };
+  }
+
+  private meetingPrep(context: AgentTaskContext): AgentTaskResult {
+    const companyName = String(context.companyName ?? "対象企業");
+    const qualification = String(context.qualification ?? "不明");
+    const weaknesses = (context.weaknesses as string[] | undefined) ?? [];
+    const growthSignalsCount = Number(context.growthSignalsCount ?? 0);
+    const recommendedServices = (context.recommendedServices as Array<{ service: string; reason: string }> | undefined) ?? [];
+
+    const agendaDraft = [
+      "挨拶・自己紹介",
+      "現状確認（貴社の事業・体制）",
+      "課題の確認",
+      "商談のゴール確認",
+      "現在のWeb施策の状況",
+      "ご予算感の確認",
+      "決裁者・意思決定プロセスの確認",
+      "スケジュール感の確認",
+      `提案方針のご説明（${recommendedServices.map((s) => s.service).join(" / ") || "検討中"}）`,
+      "Next Actionの確認",
+    ];
+
+    return {
+      summary: `${companyName}の商談準備資料を作成しました。`,
+      data: {
+        companyOverview: `${companyName}（Lead Qualification: ${qualification}）`,
+        webIssues: weaknesses,
+        growthSignalsSummary: growthSignalsCount > 0 ? `成長シグナル${growthSignalsCount}件を確認済み` : "成長シグナルは未検出",
+        recommendedProposal: recommendedServices.map((s) => s.service),
+        questionsToAsk: ["現在の月間問い合わせ数は？", "Web施策の予算感は？", "意思決定に関わる方は？"],
+        risks: qualification === "NURTURE" ? ["緊急度が低い可能性がある"] : [],
+        meetingGoal: "課題とゴールの明確化、次回提案への合意",
+        agendaDraft,
+      },
+    };
+  }
+
+  /**
+   * Deterministic keyword extraction from a transcript. Anything not found
+   * is the literal placeholder (UNASSIGNED/UNSET/UNKNOWN), never a guess —
+   * spec §30 "Meeting Hallucination禁止".
+   */
+  private meetingMinutes(context: AgentTaskContext): AgentTaskResult {
+    const transcript = String(context.transcript ?? "");
+    const companyName = String(context.companyName ?? "対象企業");
+
+    const budgetMatch = transcript.match(/(予算|budget)[^\d]{0,10}([0-9,万円]+)/i);
+    const timingMatch = transcript.match(/(来月|今期|来期|\d+月|\d+週間以内|なるべく早く)/);
+    const decisionMakerMatch = transcript.match(/(決裁者|意思決定者|決める人)は([^\s。、]+)/);
+
+    return {
+      summary: `${companyName}の商談議事録Draftを作成しました（人間の確認が必要です）。`,
+      data: {
+        summary: transcript.length > 0 ? transcript.slice(0, 200) : "文字起こしがありません。",
+        clientNeeds: transcript.includes("課題") ? "文字起こし中に課題への言及あり（詳細は人間が確認）" : "UNKNOWN",
+        goals: transcript.includes("目標") || transcript.includes("ゴール") ? "文字起こし中にゴールへの言及あり（詳細は人間が確認）" : "UNKNOWN",
+        kpis: "UNKNOWN",
+        budget: budgetMatch ? budgetMatch[2] : "UNKNOWN",
+        authority: decisionMakerMatch ? decisionMakerMatch[2] : "UNASSIGNED",
+        timing: timingMatch ? timingMatch[1] : "UNSET",
+        decisions: [],
+        questions: [],
+        concerns: [],
+        risks: [],
+        actionItems: [],
+        nextStep: "UNSET",
+      },
+    };
+  }
+
+  private proposalDraft(context: AgentTaskContext): AgentTaskResult {
+    const companyName = String(context.companyName ?? "対象企業");
+    const observedProblem = String(context.observedProblem ?? "");
+    const businessImpact = String(context.businessImpact ?? "");
+    const recommendedServices = (context.recommendedServices as Array<{ service: string; reason: string }> | undefined) ?? [];
+    const expectedOutcome = String(context.expectedOutcome ?? "");
+
+    return {
+      summary: `${companyName}向けの提案書Draftを作成しました。`,
+      data: {
+        title: `${companyName}様向けご提案書`,
+        executiveSummary: `${companyName}様の${observedProblem || "現状のWeb課題"}に対し、${recommendedServices.map((s) => s.service).join("・") || "Web改善施策"}をご提案します。`,
+        clientChallenges: observedProblem ? [observedProblem] : [],
+        goals: expectedOutcome ? [expectedOutcome] : [],
+        recommendedSolution: recommendedServices.map((s) => `${s.service}: ${s.reason}`).join(" / "),
+        scope: recommendedServices.map((s) => s.service),
+        deliverables: recommendedServices.map((s) => `${s.service}施策の実行と月次レポート`),
+        timeline: [
+          { phase: "初期設定", period: "1ヶ月目" },
+          { phase: "施策実行", period: "2〜3ヶ月目" },
+          { phase: "効果測定・改善", period: "4ヶ月目以降" },
+        ],
+        kpis: ["問い合わせ数", "自然検索流入数"],
+        assumptions: ["現在のサイト構成が維持されること"],
+        exclusions: ["大規模なシステム開発は含まない"],
+        risks: businessImpact ? [businessImpact] : [],
+        nextStep: "お見積もりのご確認と契約条件のすり合わせ",
+      },
+    };
+  }
+
+  private negotiationAnalysis(context: AgentTaskContext): AgentTaskResult {
+    const reactionCategory = String(context.reactionCategory ?? "UNKNOWN");
+    const estimatedValue = Number(context.estimatedValue ?? 0);
+
+    const responseByCategory: Record<string, { concern: string; response: string; alternatives: string[] }> = {
+      PRICE_OBJECTION: {
+        concern: "価格が想定より高いと感じている",
+        response: "価値の再説明と、段階的導入プランの提示を推奨します。",
+        alternatives: ["初期費用の分割", "契約期間を延ばして月額を下げる", "スコープを絞ったスモールスタート"],
+      },
+      SCOPE_CHANGE: {
+        concern: "対応範囲の変更を希望している",
+        response: "変更後スコープでの見積再作成が必要です。",
+        alternatives: ["フェーズ分割での対応"],
+      },
+      TIMING_CHANGE: {
+        concern: "開始時期の変更を希望している",
+        response: "契約自体は締結し、開始日を調整することを推奨します。",
+        alternatives: ["開始日を延期", "契約は締結し段階的に立ち上げ"],
+      },
+      COMPETITOR: {
+        concern: "競合と比較検討している",
+        response: "自社の差別化ポイント（実績・サポート体制）を再提示することを推奨します。",
+        alternatives: [],
+      },
+      LEGAL_CONCERN: {
+        concern: "契約条件に懸念がある",
+        response: "契約書の該当条項を確認し、必要なら弁護士確認を挟むことを推奨します。",
+        alternatives: [],
+      },
+      PROCUREMENT: {
+        concern: "社内稟議・調達プロセスに時間がかかっている",
+        response: "先方の稟議に必要な資料を追加提供することを推奨します。",
+        alternatives: [],
+      },
+    };
+    const info = responseByCategory[reactionCategory] ?? {
+      concern: "不明な反応です。人間が内容を確認してください。",
+      response: "人間が個別に判断してください。",
+      alternatives: [],
+    };
+
+    return {
+      summary: `交渉論点「${reactionCategory}」を整理しました。値引きの最終確定は行いません。`,
+      data: {
+        clientConcern: info.concern,
+        importance: reactionCategory === "PRICE_OBJECTION" || reactionCategory === "COMPETITOR" ? "HIGH" : "MEDIUM",
+        recommendedResponse: info.response,
+        alternativesToDiscount: info.alternatives,
+        // A ceiling only, never a confirmed discount — CEO must approve any actual figure (spec §44/§52).
+        suggestedMaxDiscountRate: reactionCategory === "PRICE_OBJECTION" ? 0.1 : 0,
+        estimatedValue,
+        requiresCeoJudgment: true,
+      },
     };
   }
 }

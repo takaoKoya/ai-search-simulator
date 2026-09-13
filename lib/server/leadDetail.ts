@@ -25,7 +25,7 @@ export async function getLeadDetailState(ctx: TenantContext, leadId: string) {
   if (leadError) throw leadError;
   if (!lead) throw new NotFoundError("Lead not found");
 
-  const [scoresRes, hypothesesRes, findingsRes, draftsRes, approvalsRes, byLeadRunsRes, byIcpRunsRes] = await Promise.all([
+  const [scoresRes, hypothesesRes, findingsRes, draftsRes, approvalsRes, byLeadRunsRes, byIcpRunsRes, conversationsRes, messagesRes, opportunitiesRes] = await Promise.all([
     supabase.from("lead_scores").select("*").eq("tenant_id", tenantId).eq("lead_id", leadId).order("created_at", { ascending: false }),
     supabase
       .from("lead_sales_hypotheses")
@@ -49,9 +49,26 @@ export async function getLeadDetailState(ctx: TenantContext, leadId: string) {
       .eq("tenant_id", tenantId)
       .eq("subject_type", "icp_profile")
       .filter("state->>leadId", "eq", leadId),
+    supabase.from("sales_conversations").select("*").eq("tenant_id", tenantId).eq("lead_id", leadId).order("created_at", { ascending: false }),
+    supabase.from("sales_messages").select("*").eq("tenant_id", tenantId).eq("lead_id", leadId).order("created_at", { ascending: true }),
+    supabase.from("opportunities").select("id, stage, status").eq("tenant_id", tenantId).eq("lead_id", leadId).order("created_at", { ascending: false }),
   ]);
-  for (const res of [scoresRes, hypothesesRes, findingsRes, draftsRes, approvalsRes, byLeadRunsRes, byIcpRunsRes]) {
+  for (const res of [scoresRes, hypothesesRes, findingsRes, draftsRes, approvalsRes, byLeadRunsRes, byIcpRunsRes, conversationsRes, messagesRes, opportunitiesRes]) {
     if (res.error) throw res.error;
+  }
+
+  const messageIds = (messagesRes.data ?? []).map((m) => m.id as string);
+  let messageApprovals: unknown[] = [];
+  if (messageIds.length > 0) {
+    const { data, error } = await supabase
+      .from("approval_requests")
+      .select("*")
+      .eq("tenant_id", tenantId)
+      .eq("subject_type", "sales_message")
+      .in("subject_id", messageIds)
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    messageApprovals = data ?? [];
   }
 
   const workflowRuns = [...(byLeadRunsRes.data ?? []), ...(byIcpRunsRes.data ?? [])];
@@ -70,7 +87,8 @@ export async function getLeadDetailState(ctx: TenantContext, leadId: string) {
     events = eventRows ?? [];
   }
 
-  const approvalIds = (approvalsRes.data ?? []).map((a) => a.id as string);
+  const approvals = [...(approvalsRes.data ?? []), ...(messageApprovals as Array<Record<string, unknown>>)];
+  const approvalIds = approvals.map((a) => a.id as string);
   let decisionMemories: unknown[] = [];
   if (approvalIds.length > 0) {
     const { data, error } = await supabase
@@ -91,10 +109,13 @@ export async function getLeadDetailState(ctx: TenantContext, leadId: string) {
     latestHypothesis: (hypothesesRes.data ?? [])[0] ?? null,
     findings: findingsRes.data ?? [],
     drafts: draftsRes.data ?? [],
-    approvals: approvalsRes.data ?? [],
+    approvals,
     decisionMemories,
     workflowRuns,
     events,
+    conversations: conversationsRes.data ?? [],
+    messages: messagesRes.data ?? [],
+    opportunities: opportunitiesRes.data ?? [],
   };
 }
 

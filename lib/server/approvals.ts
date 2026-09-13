@@ -3,11 +3,17 @@ import { addToDoNotContact } from "@/lib/sales/dnc";
 import { NotFoundError, ValidationError } from "@/lib/server/errors";
 import type { TenantContext } from "@/lib/server/tenant";
 
+import { getEmailConnector } from "@/lib/sales/emailConnector";
+
 export type ApprovalAction = "approve" | "reject" | "revise" | "hold" | "do_not_contact";
 
 const REASON_REQUIRED_ACTIONS: ApprovalAction[] = ["reject", "revise", "do_not_contact"];
-/** hold/do_not_contact are §27-28 CEO decisions specific to sales_lead approvals. */
-const SALES_LEAD_ONLY_ACTIONS: ApprovalAction[] = ["hold", "do_not_contact"];
+/**
+ * hold/do_not_contact are CEO decisions specific to sales-domain approvals
+ * (spec §27-28 for sales_lead, §10 for sales_send/sales_reply — the CEO can
+ * always park or blacklist a company at any point in the sales pipeline).
+ */
+const HOLD_DNC_ALLOWED_TYPES = ["sales_lead", "sales_send", "sales_reply", "proposal_approval", "deal_won"];
 
 const STATUS_BY_ACTION: Record<ApprovalAction, string> = {
   approve: "approved",
@@ -74,8 +80,8 @@ export async function decideApproval(
   if (approvalRow.status !== "pending") {
     throw new ValidationError(`This approval was already decided (status=${approvalRow.status})`);
   }
-  if (SALES_LEAD_ONLY_ACTIONS.includes(action) && approvalRow.type !== "sales_lead") {
-    throw new ValidationError(`"${action}" is only valid for sales_lead approvals`);
+  if ((action === "hold" || action === "do_not_contact") && !HOLD_DNC_ALLOWED_TYPES.includes(approvalRow.type)) {
+    throw new ValidationError(`"${action}" is not valid for ${approvalRow.type} approvals`);
   }
 
   const newStatus = STATUS_BY_ACTION[action];
@@ -161,8 +167,73 @@ async function applyNonApproval(ctx: TenantContext, approval: ApprovalRow, actio
     if (opp) {
       await supabase.from("leads").update({ status: "rejected" }).eq("id", opp.lead_id as string).eq("tenant_id", tenantId);
     }
-  } else if (approval.type === "contract_approval") {
+    return;
+  }
+
+  if (approval.type === "deal_won") {
+    if (action === "reject") {
+      // "Not won yet" — send the deal back to Negotiation rather than
+      // silently dropping it; a CEO reject here is not the same as LOST
+      // (that is its own explicit action, spec §57).
+      await supabase.from("opportunities").update({ stage: "NEGOTIATION" }).eq("id", approval.subject_id).eq("tenant_id", tenantId);
+    }
+    return;
+  }
+
+  if (approval.type === "contract_approval") {
     await supabase.from("contracts").update({ status: "rejected" }).eq("id", approval.subject_id).eq("tenant_id", tenantId);
+    return;
+  }
+
+  if (approval.type === "sales_send" || approval.type === "sales_reply") {
+    const status = action === "hold" ? undefined : "CANCELLED";
+    if (status) {
+      await supabase.from("sales_messages").update({ status }).eq("id", approval.subject_id).eq("tenant_id", tenantId);
+    }
+    if (action === "do_not_contact") {
+      const { data: message } = await supabase.from("sales_messages").select("lead_id").eq("id", approval.subject_id).eq("tenant_id", tenantId).maybeSingle();
+      if (message) {
+        const { data: lead } = await supabase.from("leads").select("company_name, domain").eq("id", message.lead_id as string).eq("tenant_id", tenantId).maybeSingle();
+        if (lead) {
+          await addToDoNotContact(supabase, tenantId, {
+            companyName: lead.company_name as string,
+            domain: lead.domain as string | null,
+            reason: reason ?? "CEOが今後営業しないと判断",
+            createdByUserId: ctx.userId,
+          });
+        }
+      }
+    }
+    return;
+  }
+
+  if (approval.type === "proposal_approval") {
+    const status = action === "revise" ? "REVISION_REQUESTED" : action === "reject" ? "REJECTED" : undefined;
+    if (status) {
+      await supabase.from("proposals").update({ status }).eq("id", approval.subject_id).eq("tenant_id", tenantId);
+    }
+    if (action === "do_not_contact") {
+      const { data: proposal } = await supabase.from("proposals").select("opportunity_id").eq("id", approval.subject_id).eq("tenant_id", tenantId).maybeSingle();
+      if (proposal) {
+        const { data: opp } = await supabase.from("opportunities").select("lead_id").eq("id", proposal.opportunity_id as string).eq("tenant_id", tenantId).maybeSingle();
+        if (opp) {
+          await supabase
+            .from("opportunities")
+            .update({ stage: "LOST", lost_reason: "other", lost_detail: reason ?? null })
+            .eq("id", proposal.opportunity_id as string)
+            .eq("tenant_id", tenantId);
+          const { data: lead } = await supabase.from("leads").select("company_name, domain").eq("id", opp.lead_id as string).eq("tenant_id", tenantId).maybeSingle();
+          if (lead) {
+            await addToDoNotContact(supabase, tenantId, {
+              companyName: lead.company_name as string,
+              domain: lead.domain as string | null,
+              reason: reason ?? "CEOが今後営業しないと判断",
+              createdByUserId: ctx.userId,
+            });
+          }
+        }
+      }
+    }
   }
   // "delivery" rejection: leave the project active for rework; no automated action beyond the decision_memory.
 }
@@ -239,42 +310,71 @@ async function applyApproval(ctx: TenantContext, approval: ApprovalRow): Promise
     return { draft: draftResult };
   }
 
-  if (approval.type === "sales_outreach") {
-    const { data: opp, error } = await supabase
-      .from("opportunities")
-      .select("id, lead_id, amount")
+  if (approval.type === "sales_outreach" || approval.type === "deal_won") {
+    return finalizeWonAndStartContract(ctx, approval.subject_id);
+  }
+
+  if (approval.type === "sales_send" || approval.type === "sales_reply") {
+    // "Create External Draft" (spec §3): a safe, non-external-effect system
+    // step that runs automatically right after CEO approval — the human
+    // gate is Approve here and the separate Final Send Gate later, not a
+    // third gate in between.
+    const { data: message, error } = await supabase
+      .from("sales_messages")
+      .select("direction, to_address, subject, body")
       .eq("id", approval.subject_id)
+      .eq("tenant_id", tenantId)
       .single();
-    if (error || !opp) throw error ?? new Error("Opportunity not found");
+    if (error || !message) throw error ?? new Error("sales_message not found");
 
-    const salesResult = await runBusinessGraph({
-      supabase,
-      tenantId,
-      graphName: "sales_graph",
-      subjectType: "opportunity",
-      subjectId: opp.id as string,
-      input: { opportunityId: opp.id, leadId: opp.lead_id },
-    });
+    // An INBOUND subject means this is a DO_NOT_CONTACT alert (spec §18) —
+    // there is no outbound draft to create; approving it just acknowledges
+    // the alert. Registering the actual DNC entry happens via the
+    // "do_not_contact" action, not "approve" (see applyNonApproval above).
+    if (message.direction === "INBOUND") {
+      return { acknowledged: true };
+    }
 
-    if (salesResult.status !== "completed") return { sales: salesResult };
+    const connector = getEmailConnector();
+    const draft = await connector.createDraft({ to: message.to_address as string, subject: message.subject as string, body: message.body as string });
+    await supabase
+      .from("sales_messages")
+      .update({ status: "READY_TO_SEND", provider: draft.provider, provider_draft_id: draft.providerDraftId })
+      .eq("id", approval.subject_id)
+      .eq("tenant_id", tenantId);
 
-    const { data: lead, error: leadError } = await supabase
-      .from("leads")
-      .select("company_name, industry")
-      .eq("id", opp.lead_id as string)
+    return { messageId: approval.subject_id, readyToSend: true, provider: draft.provider };
+  }
+
+  if (approval.type === "proposal_approval") {
+    const { data: proposal, error } = await supabase
+      .from("proposals")
+      .select("id, opportunity_id")
+      .eq("id", approval.subject_id)
+      .eq("tenant_id", tenantId)
       .single();
-    if (leadError || !lead) throw leadError ?? new Error("Lead not found");
+    if (error || !proposal) throw error ?? new Error("Proposal not found");
 
-    const contractResult = await runBusinessGraph({
-      supabase,
-      tenantId,
-      graphName: "contract_graph",
-      subjectType: "opportunity",
-      subjectId: opp.id as string,
-      input: { opportunityId: opp.id, companyName: lead.company_name, amount: opp.amount },
-    });
+    const { data: estimate } = await supabase
+      .from("estimates")
+      .select("subtotal, discount, tax, total, setup_fee, monthly_fee, annual_value")
+      .eq("proposal_id", proposal.id as string)
+      .eq("tenant_id", tenantId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    return { sales: salesResult, contract: contractResult };
+    // Snapshot the estimate into the proposal at the moment of approval
+    // (spec §37/§50): changing the estimate/proposal later must never
+    // retroactively change what was actually sent to the client.
+    await supabase
+      .from("proposals")
+      .update({ status: "APPROVED", approved_by_user_id: userId, price_summary: estimate ?? null })
+      .eq("id", approval.subject_id)
+      .eq("tenant_id", tenantId);
+    await supabase.from("opportunities").update({ stage: "PROPOSAL_PREPARATION" }).eq("id", proposal.opportunity_id as string).eq("tenant_id", tenantId);
+
+    return { proposalId: proposal.id, approvedForDelivery: true };
   }
 
   if (approval.type === "contract_approval") {
@@ -330,4 +430,54 @@ async function applyApproval(ctx: TenantContext, approval: ApprovalRow): Promise
   }
 
   throw new ValidationError(`Unknown approval type: ${approval.type}`);
+}
+
+/**
+ * Shared by both `sales_outreach` (Phase 1's legacy no-outreach-modeled
+ * flow, still supported) and `deal_won` (Phase 4's WON gate after
+ * Proposal/Estimate/Negotiation) — the final "commit to WON" decision looks
+ * identical from here regardless of how the opportunity got to this point,
+ * so both approval types run the exact same already-built
+ * `sales_graph` -> `contract_graph` chain (spec §55-56: connect back into
+ * the existing Contract Workflow, don't rebuild it).
+ */
+async function finalizeWonAndStartContract(ctx: TenantContext, opportunityId: string): Promise<Record<string, unknown>> {
+  const { supabase, tenantId } = ctx;
+
+  const { data: opp, error } = await supabase.from("opportunities").select("id, lead_id, amount, estimated_value").eq("id", opportunityId).single();
+  if (error || !opp) throw error ?? new Error("Opportunity not found");
+
+  // `sales_graph`'s finalize_won reads/writes `opportunities.amount` — keep
+  // it in sync with the richer `estimated_value` Phase 4 populates, so the
+  // existing Phase 1 contract_graph (and CEO Inbox amount display) keep
+  // working unchanged.
+  if (opp.amount == null && opp.estimated_value != null) {
+    await supabase.from("opportunities").update({ amount: opp.estimated_value }).eq("id", opportunityId).eq("tenant_id", tenantId);
+  }
+
+  const salesResult = await runBusinessGraph({
+    supabase,
+    tenantId,
+    graphName: "sales_graph",
+    subjectType: "opportunity",
+    subjectId: opp.id as string,
+    input: { opportunityId: opp.id, leadId: opp.lead_id },
+  });
+  await supabase.from("opportunities").update({ stage: "WON" }).eq("id", opportunityId).eq("tenant_id", tenantId);
+
+  if (salesResult.status !== "completed") return { sales: salesResult };
+
+  const { data: lead, error: leadError } = await supabase.from("leads").select("company_name, industry").eq("id", opp.lead_id as string).single();
+  if (leadError || !lead) throw leadError ?? new Error("Lead not found");
+
+  const contractResult = await runBusinessGraph({
+    supabase,
+    tenantId,
+    graphName: "contract_graph",
+    subjectType: "opportunity",
+    subjectId: opp.id as string,
+    input: { opportunityId: opp.id, companyName: lead.company_name, amount: opp.amount ?? opp.estimated_value },
+  });
+
+  return { sales: salesResult, contract: contractResult };
 }

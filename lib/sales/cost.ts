@@ -16,6 +16,15 @@ export const STAGE_COST_YEN = {
   sales_hypothesis: 15,
   critic_review: 5,
   sales_draft: 10,
+  channel_selection: 3,
+  outreach_draft: 12,
+  reply_classification: 4,
+  reply_draft: 10,
+  meeting_prep: 15,
+  meeting_minutes: 20,
+  proposal_draft: 35,
+  estimate_draft: 10,
+  negotiation_analysis: 8,
 } as const;
 
 export type CostStage = keyof typeof STAGE_COST_YEN;
@@ -29,6 +38,20 @@ export async function addLeadCost(ctx: GraphRunCtx, leadId: string, stage: CostS
     .from("leads")
     .update({ ai_cost_yen: current + delta })
     .eq("id", leadId)
+    .eq("tenant_id", ctx.tenantId);
+  if (updateError) throw updateError;
+}
+
+/** Same accounting as addLeadCost, but for Opportunity-stage work (spec §78: cost shown per-Opportunity too). */
+export async function addOpportunityCost(ctx: GraphRunCtx, opportunityId: string, stage: CostStage): Promise<void> {
+  const delta = STAGE_COST_YEN[stage];
+  const { data, error } = await ctx.supabase.from("opportunities").select("ai_cost_yen").eq("id", opportunityId).eq("tenant_id", ctx.tenantId).single();
+  if (error) throw error;
+  const current = (data?.ai_cost_yen as number | undefined) ?? 0;
+  const { error: updateError } = await ctx.supabase
+    .from("opportunities")
+    .update({ ai_cost_yen: current + delta })
+    .eq("id", opportunityId)
     .eq("tenant_id", ctx.tenantId);
   if (updateError) throw updateError;
 }

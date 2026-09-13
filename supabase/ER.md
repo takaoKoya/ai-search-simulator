@@ -149,3 +149,63 @@ Lead Discovery & Sales Intelligence。**テーブル分割を避け、既存の�
 新規5テーブルすべて`is_tenant_member`/`has_tenant_role`パターンを踏襲。
 他テナントの`tenant_id`を指定した`icp_profiles`への`insert`がRLS違反で
 拒否されることを実機検証済み。
+
+---
+
+## AI Sales Execution (Phase 4) — `20260917000000_ai_sales_execution_phase4.sql`
+
+Outreach送信・返信・商談・提案/見積・交渉・受注/失注。Phase3同様、**テーブル分割の抑制**を継続。
+
+### 意図的に新規テーブルを作らなかったもの
+
+- メール本文構造・送信ステータス・返信分類・スレッド紐付けは、すべて`sales_messages`
+  1テーブルのカラムとして持つ（指示書§14の「共通テーブル」要件どおり）。
+- 商談参加者・アジェンダ・議事録は`meetings`のjsonbカラム(`participants`/`agenda`/`minutes`)。
+  Action Itemsも`meetings.minutes.actionItems`に保持し、`meeting_action_items`テーブルは作らない
+  （`tasks.project_id`がNOT NULLで、WON前はprojectが存在しないため）。
+- Proposal/Estimateのバージョン管理は`version integer` + `previous_version_id`自己参照。
+  `proposal_versions`/`estimate_versions`という履歴テーブルは作らない。
+- 交渉での相手の反応は既存`findings`を再利用（`type='negotiation_item'`）。
+  `negotiation_items`テーブルは作らない。
+- Opportunityのステージ変化履歴は既存`agent_events`を再利用
+  （`event_type='opportunity.stage_changed'`）。`opportunity_stage_history`テーブルは作らない。
+- 最終的な「受注(WON)確定」は、Phase1で既に実装済みの`sales_outreach`承認タイプの
+  確定ロジック（`sales_graph`→`contract_graph`）を`finalizeWonAndStartContract()`として
+  共通関数に抽出し、新しい`deal_won`承認タイプからも同じ関数を呼ぶ形で再利用。
+  Contract Workflow側には一切手を入れていない。
+
+### 新規テーブル
+
+`sales_conversations` / `sales_messages`（構造化メール本文＋送信冪等性キー＋返信分類）/
+`meetings` / `proposals` / `estimates` / `service_catalog`（価格マスタ）/
+`external_action_logs`（Email送信・Calendar作成・Proposal送付の監査ログ、
+`performed_by_user_id`は必ず人間）。
+
+### `opportunities`への追加列
+
+`probability` / `estimated_value` / `confirmed_value` / `expected_close_date` /
+`owner_user_id` / `services` / `decision_maker` / `budget` / `need` / `timeline` /
+`next_action` / `next_action_date` / `qualification`（MEDDIC/BANT等を将来変更できる
+ようjsonbで保持）/ `lost_reason` / `lost_detail` / `ai_cost_yen` / `test_mode`。
+`stage`はPhase1から存在する列（旧`'candidate'`固定）に新しいcheck制約を追加し、
+既存の値を壊さず拡張。
+
+### 送信冪等性・二重送信防止（実機検証済み）
+
+`sales_messages`に`unique (tenant_id, idempotency_key)`制約を追加。ローカルPostgresで
+同一`idempotency_key`の2回目`insert`が一意制約違反で拒否されることを確認。実際の
+Final Send Gate（APIルート）はSENTへの状態遷移を`update ... where status='READY_TO_SEND'`
+という単一の条件付きUPDATEとして実装しており、同時クリックの2回目は0行更新となって
+安全に失敗する。
+
+### Agentロースター
+
+`handle_new_tenant_for_user()`に`outreach`/`analyst`/`meeting`/`proposal`/`estimate`/
+`negotiator`の6エージェント（`capabilities` jsonbに機能タグ付き）を追加し、既存テナントにも
+同一migration内でバックフィル。ローカルPostgresで「Phase4適用前のテナントが16→22エージェント
+になり、営業部へ自動配属され、価格マスタ4件が投入されること」を実機検証済み。
+
+### RLS
+
+新規7テーブルすべて`is_tenant_member`/`has_tenant_role`パターンを踏襲。RLS有効化・
+ポリシー数(各4件)をローカルPostgresで確認済み。

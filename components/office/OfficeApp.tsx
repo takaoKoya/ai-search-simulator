@@ -298,6 +298,7 @@ export default function OfficeApp({
       {leadsOpen && (
         <LeadsPanel
           leads={state.leads}
+          opportunities={state.opportunities}
           onClose={() => setLeadsOpen(false)}
           onCreate={async (companyName, industry, website) => {
             await callApi("/api/leads", { body: JSON.stringify({ companyName, industry, website }) });
@@ -433,8 +434,11 @@ function OfficeBoard({
   );
 }
 
+const PIPELINE_FUNNEL_STAGES = ["QUALIFIED", "MEETING", "NEEDS_ANALYSIS", "PROPOSAL_PREPARATION", "PROPOSAL_SENT", "NEGOTIATION", "VERBAL_AGREEMENT", "WON"] as const;
+
 function LeadsPanel({
   leads,
+  opportunities,
   onClose,
   onCreate,
   onStartResearch,
@@ -442,6 +446,7 @@ function LeadsPanel({
   onOpenSettings,
 }: {
   leads: OfficeState["leads"];
+  opportunities: OfficeState["opportunities"];
   onClose: () => void;
   onCreate: (companyName: string, industry: string, website: string) => Promise<void>;
   onStartResearch: (id: string) => Promise<void>;
@@ -473,6 +478,37 @@ function LeadsPanel({
             </button>
           </div>
         </div>
+
+        {opportunities.length > 0 && (
+          <div className="mt-3 rounded-lg border p-3" style={{ borderColor: "var(--office-border)", background: "var(--office-surface)" }}>
+            <p className="mb-1.5 text-[11px] font-semibold" style={{ color: "var(--office-text-secondary)" }}>
+              Sales Pipeline ({opportunities.length}件)
+            </p>
+            <div className="flex flex-wrap gap-1.5 text-[10px]">
+              {PIPELINE_FUNNEL_STAGES.map((stage) => {
+                const count = opportunities.filter((o) => o.stage === stage).length;
+                if (count === 0) return null;
+                return (
+                  <span key={stage} className="rounded-full border px-2 py-0.5" style={{ borderColor: "var(--office-border)", color: "var(--office-text-secondary)" }}>
+                    {stage}: {count}
+                  </span>
+                );
+              })}
+            </div>
+            <ul className="mt-2 space-y-1">
+              {opportunities.map((o) => (
+                <li key={o.id} className="flex items-center justify-between text-[11px]">
+                  <a href={`/office/opportunities/${o.id}`} target="_blank" rel="noreferrer" className="truncate underline" style={{ color: "var(--office-ai-accent)" }}>
+                    {o.companyName ?? "対象企業"}
+                  </a>
+                  <span style={{ color: "var(--office-text-muted)" }}>
+                    {o.stage} {o.estimatedValue != null ? `・ ¥${o.estimatedValue.toLocaleString()}` : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="mt-4 space-y-2 rounded-lg border p-3" style={{ borderColor: "var(--office-border)", background: "var(--office-surface)" }}>
           <p className="text-xs font-semibold" style={{ color: "var(--office-text-secondary)" }}>

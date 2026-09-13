@@ -12,12 +12,28 @@ import { buildMeasurementGraph } from "@/lib/langgraph/graphs/measurement";
 import { buildRenewalGraph } from "@/lib/langgraph/graphs/renewal";
 import { buildLeadDiscoveryGraph } from "@/lib/langgraph/graphs/leadDiscovery";
 import { buildSalesDraftGraph } from "@/lib/langgraph/graphs/salesDraft";
+import { buildSalesOutreachPrepGraph } from "@/lib/langgraph/graphs/salesOutreachPrep";
+import { buildReplyAnalysisGraph } from "@/lib/langgraph/graphs/replyAnalysis";
+import { buildMeetingSchedulingGraph } from "@/lib/langgraph/graphs/meetingScheduling";
+import { buildMeetingPrepGraph } from "@/lib/langgraph/graphs/meetingPrep";
+import { buildMeetingMinutesGraph } from "@/lib/langgraph/graphs/meetingMinutes";
+import { buildProposalDraftGraph } from "@/lib/langgraph/graphs/proposalDraft";
+import { buildNegotiationAnalysisGraph } from "@/lib/langgraph/graphs/negotiationAnalysis";
+import { buildDealWonGateGraph } from "@/lib/langgraph/graphs/dealWonGate";
 
 export const GRAPH_NAMES = [
   "lead_discovery_graph",
   "lead_generation_graph",
   "sales_graph",
   "sales_draft_graph",
+  "sales_outreach_prep_graph",
+  "reply_analysis_graph",
+  "meeting_scheduling_graph",
+  "meeting_prep_graph",
+  "meeting_minutes_graph",
+  "proposal_draft_graph",
+  "negotiation_analysis_graph",
+  "deal_won_gate_graph",
   "contract_graph",
   "onboarding_graph",
   "execution_graph",
@@ -117,6 +133,14 @@ const GRAPH_LABEL: Record<GraphName, string> = {
   lead_generation_graph: "Lead Generation",
   sales_graph: "Sales",
   sales_draft_graph: "Sales Draft",
+  sales_outreach_prep_graph: "Sales Outreach Prep",
+  reply_analysis_graph: "Reply Analysis",
+  meeting_scheduling_graph: "Meeting Scheduling",
+  meeting_prep_graph: "Meeting Prep",
+  meeting_minutes_graph: "Meeting Minutes",
+  proposal_draft_graph: "Proposal Draft",
+  negotiation_analysis_graph: "Negotiation Analysis",
+  deal_won_gate_graph: "Deal Won Gate",
   contract_graph: "Contract Review",
   onboarding_graph: "Onboarding",
   execution_graph: "Execution",
@@ -177,6 +201,22 @@ function invokeGraph(
       return buildSalesGraph(ctx, checkpointer).invoke(input, config);
     case "sales_draft_graph":
       return buildSalesDraftGraph(ctx, checkpointer).invoke(input, config);
+    case "sales_outreach_prep_graph":
+      return buildSalesOutreachPrepGraph(ctx, checkpointer).invoke(input, config);
+    case "reply_analysis_graph":
+      return buildReplyAnalysisGraph(ctx, checkpointer).invoke(input, config);
+    case "meeting_scheduling_graph":
+      return buildMeetingSchedulingGraph(ctx, checkpointer).invoke(input, config);
+    case "meeting_prep_graph":
+      return buildMeetingPrepGraph(ctx, checkpointer).invoke(input, config);
+    case "meeting_minutes_graph":
+      return buildMeetingMinutesGraph(ctx, checkpointer).invoke(input, config);
+    case "proposal_draft_graph":
+      return buildProposalDraftGraph(ctx, checkpointer).invoke(input, config);
+    case "negotiation_analysis_graph":
+      return buildNegotiationAnalysisGraph(ctx, checkpointer).invoke(input, config);
+    case "deal_won_gate_graph":
+      return buildDealWonGateGraph(ctx, checkpointer).invoke(input, config);
     case "contract_graph":
       return buildContractGraph(ctx, checkpointer).invoke(input, config);
     case "onboarding_graph":

@@ -1,0 +1,68 @@
+import type { NextRequest } from "next/server";
+import { APPROVER_ROLES, assertRole, getTenantContext } from "@/lib/server/tenant";
+import { withRoute } from "@/lib/server/withRoute";
+import { NotFoundError, ValidationError } from "@/lib/server/errors";
+
+/**
+ * Proposal Delivery (spec §49-50): human sends the CEO-approved proposal —
+ * this route only ever runs after `proposals.status = 'APPROVED'`. Fixes a
+ * `sent_at`/`sent_to`/`proposal_version` snapshot so a later edit to the
+ * proposal row can never retroactively change what was actually delivered.
+ */
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  return withRoute(async () => {
+    const { id } = await params;
+    const ctx = await getTenantContext();
+    assertRole(ctx, APPROVER_ROLES);
+    const { supabase, tenantId, userId } = ctx;
+    const body = await request.json().catch(() => ({}));
+    const sentTo = typeof body.sentTo === "string" ? body.sentTo : null;
+
+    const { data: proposal, error } = await supabase
+      .from("proposals")
+      .select("id, status, opportunity_id, version, title")
+      .eq("id", id)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!proposal) throw new NotFoundError("Proposal not found");
+    if (proposal.status === "SENT") {
+      return { alreadySent: true };
+    }
+    if (proposal.status !== "APPROVED") {
+      throw new ValidationError(`Proposal is not approved yet (status=${proposal.status})`);
+    }
+
+    const { data: updated, error: updateError } = await supabase
+      .from("proposals")
+      .update({ status: "SENT", sent_at: new Date().toISOString(), sent_to: sentTo })
+      .eq("id", id)
+      .eq("tenant_id", tenantId)
+      .eq("status", "APPROVED")
+      .select("id")
+      .maybeSingle();
+    if (updateError) throw updateError;
+    if (!updated) return { alreadySent: true };
+
+    await supabase.from("opportunities").update({ stage: "PROPOSAL_SENT" }).eq("id", proposal.opportunity_id as string).eq("tenant_id", tenantId);
+
+    await supabase.from("external_action_logs").insert({
+      tenant_id: tenantId,
+      action_type: "PROPOSAL_DELIVERY",
+      subject_type: "proposal",
+      subject_id: id,
+      performed_by_user_id: userId,
+      status: "SUCCESS",
+      payload: { title: proposal.title, version: proposal.version, sentTo },
+    });
+
+    await supabase.from("agent_events").insert({
+      tenant_id: tenantId,
+      event_type: "proposal.sent",
+      message: `提案書「${proposal.title}」を送付しました`,
+      payload: { proposalId: id, opportunityId: proposal.opportunity_id },
+    });
+
+    return { sent: true };
+  });
+}
