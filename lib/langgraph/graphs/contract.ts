@@ -1,6 +1,6 @@
 import { Annotation, StateGraph, START, END } from "@langchain/langgraph";
 import type { SupabaseCheckpointSaver } from "@/lib/langgraph/checkpointer";
-import { createApprovalRequest, runAgentStep, type GraphRunCtx } from "@/lib/langgraph/context";
+import { createApprovalRequest, emitEvent, runAgentStep, type GraphRunCtx } from "@/lib/langgraph/context";
 import { lastValue, type GraphStatus } from "@/lib/langgraph/state";
 import { getProviderForAgent } from "@/lib/ai/provider";
 
@@ -47,7 +47,20 @@ export function buildContractGraph(ctx: GraphRunCtx, checkpointer: SupabaseCheck
           };
         }
       );
-      return { contractId: data.contractId, riskLevel: data.riskLevel as string, currentNode: "contract_review" };
+      const riskLevel = data.riskLevel as string;
+      await emitEvent(ctx, {
+        eventType: "contract.reviewed",
+        message: `${state.companyName}との契約内容を抽出(Risk: ${riskLevel})`,
+        payload: { contractId: data.contractId, riskLevel },
+      });
+      if (riskLevel !== "LOW") {
+        await emitEvent(ctx, {
+          eventType: "contract.risk_detected",
+          message: `契約リスクを検出(${riskLevel})`,
+          payload: { contractId: data.contractId, riskLevel, findings: data.findings },
+        });
+      }
+      return { contractId: data.contractId, riskLevel, currentNode: "contract_review" };
     })
     .addNode("request_approval", async (state) => {
       const highRisk = state.riskLevel === "HIGH" || state.riskLevel === "CRITICAL";

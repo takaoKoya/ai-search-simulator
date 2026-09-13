@@ -14,11 +14,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const body = await request.json().catch(() => ({}));
     const action = body.action as ApprovalAction;
     const reason = typeof body.reason === "string" ? body.reason : undefined;
+    const editNote = typeof body.editNote === "string" ? body.editNote : undefined;
     if (!VALID_ACTIONS.includes(action)) {
       throw new ValidationError(`action must be one of: ${VALID_ACTIONS.join(", ")}`);
     }
 
-    const result = await decideApproval(ctx, id, action, reason);
+    const result = await decideApproval(ctx, id, action, reason, editNote);
     return result;
   });
 }

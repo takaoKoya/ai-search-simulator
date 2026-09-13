@@ -48,6 +48,11 @@ export function buildExecutionGraph(ctx: GraphRunCtx, checkpointer: SupabaseChec
       };
     })
     .addNode("execute_task", async (state) => {
+      await emitEvent(ctx, {
+        eventType: "task.started",
+        message: `${state.nextTaskTitle}を開始`,
+        payload: { taskId: state.nextTaskId },
+      });
       const result = await runAgentStep(
         ctx,
         {
@@ -103,9 +108,15 @@ export function buildExecutionGraph(ctx: GraphRunCtx, checkpointer: SupabaseChec
         }
       );
       const passed = Boolean(result.passed);
+      await emitEvent(ctx, {
+        eventType: "critic.reviewed",
+        message: passed ? `${state.nextTaskTitle}: Criticレビュー通過` : `${state.nextTaskTitle}: Criticが差し戻し`,
+        payload: { taskId: state.nextTaskId, passed },
+      });
       if (!passed) {
         await ctx.supabase.from("tasks").update({ status: "blocked" }).eq("id", state.nextTaskId).eq("tenant_id", ctx.tenantId);
         await emitEvent(ctx, { eventType: "critic.rejected", message: "Criticがタスク成果物を差し戻し", payload: { taskId: state.nextTaskId } });
+        await emitEvent(ctx, { eventType: "task.blocked", message: `${state.nextTaskTitle}がブロック状態に`, payload: { taskId: state.nextTaskId } });
       }
       return { criticPassed: passed, currentNode: "critic_task" };
     })
@@ -113,7 +124,8 @@ export function buildExecutionGraph(ctx: GraphRunCtx, checkpointer: SupabaseChec
       if (!state.criticPassed) {
         return { currentNode: "qa_task" };
       }
-      await runAgentStep(
+      await emitEvent(ctx, { eventType: "qa.started", message: `${state.nextTaskTitle}のQAを開始`, payload: { taskId: state.nextTaskId } });
+      const qaResult = await runAgentStep(
         ctx,
         {
           agentCode: "qa",
@@ -128,9 +140,15 @@ export function buildExecutionGraph(ctx: GraphRunCtx, checkpointer: SupabaseChec
           return { output: res.data, summary: res.summary, result: res.data };
         }
       );
+      if (!qaResult.passed) {
+        await ctx.supabase.from("tasks").update({ status: "blocked" }).eq("id", state.nextTaskId).eq("tenant_id", ctx.tenantId);
+        await emitEvent(ctx, { eventType: "qa.failed", message: `${state.nextTaskTitle}のQAで問題を検出`, payload: { taskId: state.nextTaskId } });
+        return { currentNode: "qa_task" };
+      }
       await ctx.supabase.from("deliverables").update({ status: "approved" }).eq("id", state.currentDeliverableId).eq("tenant_id", ctx.tenantId);
       await ctx.supabase.from("tasks").update({ status: "done" }).eq("id", state.nextTaskId).eq("tenant_id", ctx.tenantId);
       await emitEvent(ctx, { eventType: "qa.passed", message: "QAを通過しました", payload: { taskId: state.nextTaskId } });
+      await emitEvent(ctx, { eventType: "task.completed", message: `${state.nextTaskTitle}が完了`, payload: { taskId: state.nextTaskId } });
       return { currentNode: "qa_task" };
     })
     .addNode("request_delivery_approval", async (state) => {

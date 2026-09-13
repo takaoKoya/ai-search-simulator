@@ -4,13 +4,48 @@ import { render, screen } from "@testing-library/react";
 import OfficeApp from "@/components/office/OfficeApp";
 import type { OfficeState } from "@/lib/server/officeState";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 function buildState(): OfficeState {
-  const agentResearch = { id: "agent-research", code: "research", name: "リサーチ", role: "company_research", job_title: "Company Research", status: "idle", avatar: null, current_project_id: null, current_task_id: null, is_active: true };
-  const agentSales = { id: "agent-sales", code: "sales", name: "セール", role: "sales_strategy", job_title: "Sales Strategy", status: "working", avatar: null, current_project_id: null, current_task_id: null, is_active: true };
+  const agentResearch = {
+    id: "agent-research",
+    code: "research",
+    name: "リサーチ",
+    role: "company_research",
+    job_title: "Company Research",
+    status: "idle",
+    avatar: null,
+    notificationCount: 0,
+    current_project_id: null,
+    current_task_id: null,
+    is_active: true,
+  };
+  const agentSales = {
+    id: "agent-sales",
+    code: "sales",
+    name: "セール",
+    role: "sales_strategy",
+    job_title: "Sales Strategy",
+    status: "working",
+    avatar: null,
+    notificationCount: 0,
+    current_project_id: null,
+    current_task_id: null,
+    is_active: true,
+  };
 
   return {
     departments: [
-      { id: "dept-sales", code: "sales", name: "営業部", sort_order: 1, agents: [agentResearch, agentSales] },
+      {
+        id: "dept-sales",
+        code: "sales",
+        name: "営業部",
+        sort_order: 1,
+        agents: [agentResearch, agentSales],
+        stats: { activeCount: 1, totalCount: 2, activeProjectCount: 0, pendingApprovalCount: 1, warningCount: 0 },
+      },
     ],
     unassignedAgents: [],
     agents: [agentResearch, agentSales],
@@ -51,6 +86,7 @@ function buildState(): OfficeState {
     projects: [],
     tasks: [],
     leads: [{ id: "lead-1", company_name: "テスト株式会社", industry: "小売", status: "in_review", score: 50, created_at: new Date().toISOString() }],
+    ceoSummary: { byType: [{ type: "sales_outreach", label: "営業承認", count: 1 }], totalPending: 1, estimatedMinutesToday: null },
   } as unknown as OfficeState;
 }
 
@@ -61,7 +97,7 @@ describe("OfficeApp", () => {
       vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve(buildState()) }))
     );
 
-    render(<OfficeApp initialState={buildState()} role="owner" />);
+    render(<OfficeApp initialState={buildState()} role="owner" tenantName="テストテナント" />);
 
     expect(screen.getByText("AI Office")).toBeTruthy();
     expect(screen.getAllByText("営業部").length).toBeGreaterThan(0);

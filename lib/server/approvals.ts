@@ -25,9 +25,14 @@ export async function decideApproval(
   ctx: TenantContext,
   approvalId: string,
   action: ApprovalAction,
-  reason?: string
+  reason?: string,
+  editNote?: string
 ): Promise<{ status: string; followUp?: Record<string, unknown> }> {
   const { supabase, tenantId, userId } = ctx;
+
+  if (action !== "approve" && (!reason || reason.trim().length === 0)) {
+    throw new ValidationError("Reject / Request Revision には理由の入力が必須です");
+  }
 
   const { data: approval, error } = await supabase
     .from("approval_requests")
@@ -42,6 +47,9 @@ export async function decideApproval(
   }
 
   const newStatus = action === "approve" ? "approved" : action === "reject" ? "rejected" : "revision_requested";
+  const eventType =
+    action === "approve" ? "approval.approved" : action === "reject" ? "approval.rejected" : "approval.revision_requested";
+  const actionLabel = action === "approve" ? "CEOが承認" : action === "reject" ? "CEOが却下" : "CEOが差し戻し";
 
   const { error: updateError } = await supabase
     .from("approval_requests")
@@ -52,9 +60,9 @@ export async function decideApproval(
 
   await supabase.from("agent_events").insert({
     tenant_id: tenantId,
-    event_type: action === "approve" ? "approval.approved" : "approval.rejected",
-    message: `${approvalRow.title}: ${action === "approve" ? "CEOが承認" : action === "reject" ? "CEOが却下" : "CEOが差し戻し"}`,
-    payload: { approvalRequestId: approvalId, action },
+    event_type: eventType,
+    message: `${approvalRow.title}: ${actionLabel}`,
+    payload: { approvalRequestId: approvalId, action, type: approvalRow.type },
   });
 
   if (action !== "approve") {
@@ -62,11 +70,24 @@ export async function decideApproval(
       tenant_id: tenantId,
       approval_request_id: approvalId,
       category: approvalRow.type,
-      note: reason && reason.trim().length > 0 ? reason : `${action === "reject" ? "却下" : "差し戻し"}(理由未記入)`,
+      note: reason!.trim(),
       created_by_user_id: userId,
     });
     await applyRejection(ctx, approvalRow);
     return { status: newStatus };
+  }
+
+  // "Edit and Approve": the CEO's edit note is captured as a decision_memory
+  // even though the request is approved as-is (Phase 2 does not yet rewrite
+  // the underlying draft content from this note).
+  if (editNote && editNote.trim().length > 0) {
+    await supabase.from("decision_memories").insert({
+      tenant_id: tenantId,
+      approval_request_id: approvalId,
+      category: `${approvalRow.type}_edit`,
+      note: editNote.trim(),
+      created_by_user_id: userId,
+    });
   }
 
   const followUp = await applyApproval(ctx, approvalRow);

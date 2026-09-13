@@ -95,10 +95,62 @@ and delivery. See `supabase/ER.md` for the full schema/RLS writeup.
   switches to a vertical tab UI (社員一覧/稼働中/承認待ち/Activity) instead of shrinking
   the desktop board.
 
-### Known Phase 1 limitations
+### AI Office UI/UX (Phase 2)
 
-- CEO Inbox supports Approve / Reject / Request Revision; "Edit and Approve" (editing the
-  AI-drafted content inline before approving) is not implemented yet.
+Phase 2 took the same Phase 1 data (agents/workflow_runs/agent_events/tasks/
+approval_requests/departments/projects) and raised the AI Office from a functional
+board to something that reads as "AI employees actually working here":
+
+- **Design tokens** (`app/globals.css` `.ai-office` block): dark-navy palette, status
+  colors, and motion all live as CSS custom properties, not scattered hex codes.
+  Per-status motion (`lib/office/status.ts`) is small on purpose and fully disabled
+  under `prefers-reduced-motion`.
+- **Department Rooms** (`components/office/DepartmentRoom.tsx`): each department is a
+  collapsible "room" with real header stats — active/total agents, active projects,
+  pending approvals, warnings — computed in `lib/server/officeState.ts` from
+  `agent_department_assignments`, `approval_requests.requested_by_agent_id`, and task
+  status, not hardcoded department names.
+- **Event coverage** (`lib/office/eventTypes.ts`): every event type from the spec
+  (workflow.*, critic.reviewed, task.started/completed/blocked, qa.started/failed,
+  contract.reviewed/risk_detected, lead.researched/scored, approval.revision_requested,
+  …) is both emitted by the graphs (`lib/langgraph/graphs/*`, `lib/langgraph/orchestrator.ts`)
+  and categorized (営業/実務/承認/契約/納品/Warning/Error) for the Activity Feed's filter
+  tabs and click-through to the relevant agent/approval.
+- **CEO Seat/Inbox**: per-type pending counts plus a "today's approvals ≈ N min"
+  estimate computed from this tenant's own historical `created_at`→`decided_at` gaps
+  (falls back to no estimate when there's no history — never a guessed constant).
+  Inbox cards carry a real urgency tier (risk + how long it's been pending), the
+  resolved company/project name and deal amount, and Edit-and-Approve (the edit note is
+  saved as a `decision_memory`; Phase 2 does not yet rewrite the underlying draft from
+  it). Reject/Revise require a reason, enforced server-side in `lib/server/approvals.ts`.
+- **Agent Drawer tabs** (Overview/Activity/Evidence/Tools/Technical): Technical is
+  gated to owner/ceo/admin. Evidence renders `findings` rows or a visibly distinct
+  "no evidence" state; no fabricated confidence score is shown since there's no real
+  calculation for one yet.
+- **Project Room** (`/office/projects/[id]`, `lib/server/projectRoom.ts`): a
+  single-project view with a lifecycle stepper, team, tasks, findings, approvals,
+  deliverables, a project-scoped Timeline, and a Delivery Gate
+  (Execution Complete / Critic Passed / QA Passed / CEO Approved) computed from actual
+  task/deliverable/approval rows — e.g. QA Passed requires every task to have its own
+  approved-or-delivered deliverable, not just "some deliverable exists."
+- **Realtime**: no Supabase Realtime `postgres_changes` subscriptions were added.
+  Broadcasting those tables by default does not enforce RLS unless Realtime-specific
+  policies are configured and verified against the live project, which this sandbox
+  cannot do — enabling it blind risked leaking one tenant's events to another. The
+  Office instead polls `/api/office/state` (`/api/projects/[id]/room` for Project Room)
+  every few seconds and shows a small "Realtime disconnected" indicator with automatic
+  retry on fetch failure. Revisit Realtime once Realtime RLS is confirmed on the target
+  project.
+- **Loading/Empty/Error**: no whole-screen spinners — the Agent Drawer shows a
+  skeleton and a distinct error state (with the underlying message) instead of hanging
+  forever if its detail fetch fails; `/office` and everything under it has a route-level
+  error boundary (`app/office/error.tsx`) so a client exception doesn't blank the app.
+
+### Known limitations
+
+- CEO Inbox's Edit-and-Approve saves the CEO's note as a decision_memory but does not
+  yet rewrite the AI-drafted content itself before sending it further into the
+  pipeline.
 - No live Supabase project was available in the development sandbox, so the
   authenticated browser flow (login → create Lead → approve → Delivered) is verified
   through automated tests against a fake Supabase client

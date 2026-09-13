@@ -1,48 +1,90 @@
-export const STATUS_LABEL: Record<string, string> = {
-  idle: "待機中",
-  queued: "順番待ち",
-  thinking: "思考中",
-  working: "作業中",
-  tool_calling: "ツール実行中",
-  waiting_external: "外部待ち",
-  waiting_human: "人間承認待ち",
-  reviewing: "レビュー中",
-  handoff: "引き継ぎ中",
-  completed: "完了",
-  warning: "要確認",
-  failed: "失敗",
+import {
+  AlertTriangle,
+  ArrowLeftRight,
+  Bell,
+  BellRing,
+  Brain,
+  CheckCircle2,
+  Circle,
+  ClipboardCheck,
+  Clock,
+  Globe,
+  Laptop,
+  Search,
+  XCircle,
+  type LucideIcon,
+} from "lucide-react";
+
+export type AgentStatus =
+  | "idle"
+  | "queued"
+  | "thinking"
+  | "working"
+  | "tool_calling"
+  | "waiting_external"
+  | "waiting_human"
+  | "reviewing"
+  | "handoff"
+  | "completed"
+  | "warning"
+  | "failed";
+
+interface StatusMeta {
+  label: string;
+  icon: LucideIcon;
+  colorVar: string; // CSS custom property name, see globals.css `.ai-office`
+  animationClass: string | null;
+}
+
+export const STATUS_META: Record<string, StatusMeta> = {
+  idle: { label: "待機中", icon: Circle, colorVar: "--office-status-idle", animationClass: null },
+  queued: { label: "順番待ち", icon: Clock, colorVar: "--office-status-queued", animationClass: null },
+  thinking: { label: "思考中", icon: Brain, colorVar: "--office-status-thinking", animationClass: "status-anim-thinking" },
+  working: { label: "作業中", icon: Laptop, colorVar: "--office-status-working", animationClass: "status-anim-working" },
+  tool_calling: {
+    label: "ツール実行中",
+    icon: Search,
+    colorVar: "--office-status-tool-calling",
+    animationClass: "status-anim-tool_calling",
+  },
+  waiting_external: {
+    label: "外部待ち",
+    icon: Globe,
+    colorVar: "--office-status-waiting-external",
+    animationClass: "status-anim-waiting_external",
+  },
+  waiting_human: {
+    label: "CEO確認待ち",
+    icon: BellRing,
+    colorVar: "--office-status-waiting-human",
+    animationClass: "status-anim-waiting_human",
+  },
+  reviewing: {
+    label: "レビュー中",
+    icon: ClipboardCheck,
+    colorVar: "--office-status-reviewing",
+    animationClass: "status-anim-reviewing",
+  },
+  handoff: { label: "引き継ぎ中", icon: ArrowLeftRight, colorVar: "--office-status-handoff", animationClass: null },
+  completed: {
+    label: "完了",
+    icon: CheckCircle2,
+    colorVar: "--office-status-completed",
+    animationClass: "status-anim-completed",
+  },
+  warning: { label: "要確認", icon: AlertTriangle, colorVar: "--office-status-warning", animationClass: null },
+  failed: { label: "失敗", icon: XCircle, colorVar: "--office-status-failed", animationClass: "status-anim-failed" },
 };
 
-export const STATUS_DOT_CLASS: Record<string, string> = {
-  idle: "bg-slate-500",
-  queued: "bg-slate-400",
-  thinking: "bg-sky-400",
-  working: "bg-sky-400 animate-pulse",
-  tool_calling: "bg-cyan-400 animate-pulse",
-  waiting_external: "bg-amber-400",
-  waiting_human: "bg-amber-400 animate-pulse",
-  reviewing: "bg-violet-400",
-  handoff: "bg-teal-400",
-  completed: "bg-emerald-400",
-  warning: "bg-amber-400",
-  failed: "bg-rose-500",
-};
+const FALLBACK_META: StatusMeta = { label: "不明", icon: Circle, colorVar: "--office-status-idle", animationClass: null };
 
-export const STATUS_TEXT_CLASS: Record<string, string> = {
-  idle: "text-slate-400",
-  queued: "text-slate-400",
-  thinking: "text-sky-300",
-  working: "text-sky-300",
-  tool_calling: "text-cyan-300",
-  waiting_external: "text-amber-300",
-  waiting_human: "text-amber-300",
-  reviewing: "text-violet-300",
-  handoff: "text-teal-300",
-  completed: "text-emerald-300",
-  warning: "text-amber-300",
-  failed: "text-rose-400",
-};
+export function getStatusMeta(status: string): StatusMeta {
+  return STATUS_META[status] ?? FALLBACK_META;
+}
 
 export function statusLabel(status: string): string {
-  return STATUS_LABEL[status] ?? status;
+  return getStatusMeta(status).label;
 }
+
+/** Notification bell icon re-exported for card badges (kept distinct from BellRing used for waiting_human). */
+export const NotificationIcon = Bell;

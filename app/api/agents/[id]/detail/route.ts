@@ -16,7 +16,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     if (error) throw error;
     if (!agent) throw new NotFoundError("Agent not found");
 
-    const [runsRes, eventsRes] = await Promise.all([
+    const [runsRes, eventsRes, findingsRes] = await Promise.all([
       supabase
         .from("agent_runs")
         .select("id, workflow_run_id, node_name, status, input, output, started_at, completed_at, error")
@@ -31,9 +31,17 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         .or(`from_agent_id.eq.${id},to_agent_id.eq.${id}`)
         .order("created_at", { ascending: false })
         .limit(20),
+      supabase
+        .from("findings")
+        .select("id, type, payload, lead_id, project_id, created_at")
+        .eq("tenant_id", tenantId)
+        .eq("agent_id", id)
+        .order("created_at", { ascending: false })
+        .limit(10),
     ]);
     if (runsRes.error) throw runsRes.error;
     if (eventsRes.error) throw eventsRes.error;
+    if (findingsRes.error) throw findingsRes.error;
 
     const runs = runsRes.data ?? [];
     const runIds = runs.map((r) => r.id as string);
@@ -64,6 +72,6 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       task = (data as typeof task) ?? null;
     }
 
-    return { agent, project, task, runs, events: eventsRes.data ?? [], toolCalls };
+    return { agent, project, task, runs, events: eventsRes.data ?? [], toolCalls, findings: findingsRes.data ?? [] };
   });
 }

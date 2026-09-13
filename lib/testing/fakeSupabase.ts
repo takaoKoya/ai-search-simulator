@@ -39,13 +39,27 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: null }> {
     return this;
   }
 
+  in(col: string, values: unknown[]): this {
+    this.filters.push((row) => values.includes(row[col]));
+    return this;
+  }
+
+  not(col: string, operator: string, value: unknown): this {
+    if (operator === "is" && value === null) {
+      this.filters.push((row) => row[col] !== null && row[col] !== undefined);
+      return this;
+    }
+    this.filters.push((row) => row[col] !== value);
+    return this;
+  }
+
   lt(col: string, val: unknown): this {
     this.filters.push((row) => (row[col] as string) < (val as string));
     return this;
   }
 
-  order(col: string, { ascending }: { ascending: boolean }): this {
-    this.orderSpec = { col, ascending };
+  order(col: string, options?: { ascending?: boolean }): this {
+    this.orderSpec = { col, ascending: options?.ascending ?? true };
     return this;
   }
 

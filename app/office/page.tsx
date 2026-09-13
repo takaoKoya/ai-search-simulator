@@ -10,7 +10,10 @@ export const metadata: Metadata = {
 
 export default async function OfficePage() {
   const ctx = await getTenantContext();
-  const initialState = await getOfficeState(ctx);
+  const [initialState, tenantRes] = await Promise.all([
+    getOfficeState(ctx),
+    ctx.supabase.from("tenants").select("name").eq("id", ctx.tenantId).single(),
+  ]);
 
-  return <OfficeApp initialState={initialState} role={ctx.role} />;
+  return <OfficeApp initialState={initialState} role={ctx.role} tenantName={(tenantRes.data?.name as string) ?? "AI Company"} />;
 }

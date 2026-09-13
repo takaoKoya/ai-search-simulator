@@ -48,6 +48,12 @@ export function buildLeadGenerationGraph(ctx: GraphRunCtx, checkpointer: Supabas
           return { output: result.data, summary: result.summary, result: result.data };
         }
       );
+      await emitEvent(ctx, { eventType: "lead.researched", message: `${state.companyName}の企業調査が完了`, payload: { leadId: state.leadId } });
+      await emitEvent(ctx, {
+        eventType: "lead.scored",
+        message: `${state.companyName}のデジタル成熟度スコア: ${data.digitalScore}/100`,
+        payload: { leadId: state.leadId, score: data.digitalScore },
+      });
       return { findings: data, currentNode: "research" };
     })
     .addNode("sales_strategy", async (state) => {
@@ -111,8 +117,14 @@ export function buildLeadGenerationGraph(ctx: GraphRunCtx, checkpointer: Supabas
       );
       const passed = Boolean(data.passed);
       const issues = (data.issues as string[]) ?? [];
+      const criticAgent = await getAgentByCode(ctx, "kuro");
+      await emitEvent(ctx, {
+        eventType: "critic.reviewed",
+        fromAgentId: criticAgent.id,
+        message: passed ? "Critic: 差し戻し無し" : `Critic: ${issues.length}件の差し戻し事由`,
+        payload: { passed, issues },
+      });
       if (!passed) {
-        const criticAgent = await getAgentByCode(ctx, "kuro");
         await ctx.supabase.from("decision_memories").insert({
           tenant_id: ctx.tenantId,
           category: "critic_rejection",

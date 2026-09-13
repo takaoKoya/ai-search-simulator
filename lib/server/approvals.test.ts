@@ -88,6 +88,53 @@ describe("decideApproval", () => {
     expect(fake.table("contracts")).toHaveLength(0);
   });
 
+  it("requires a reason for reject/revise but not for approve", async () => {
+    const fake = new FakeSupabase();
+    const tenantId = "t1";
+    seedAgents(fake, tenantId);
+    fake.table("leads").push({ id: "lead-1", tenant_id: tenantId, company_name: "テスト株式会社", status: "in_review" });
+    fake.table("opportunities").push({ id: "opp-1", tenant_id: tenantId, lead_id: "lead-1", status: "pending_approval" });
+    fake.table("approval_requests").push({
+      id: "appr-1",
+      tenant_id: tenantId,
+      type: "sales_outreach",
+      subject_type: "opportunity",
+      subject_id: "opp-1",
+      title: "x",
+      status: "pending",
+    });
+
+    const ctx = makeCtx(fake, tenantId);
+    await expect(decideApproval(ctx, "appr-1", "reject")).rejects.toThrow(/理由/);
+    await expect(decideApproval(ctx, "appr-1", "revise", "   ")).rejects.toThrow(/理由/);
+  });
+
+  it("records an Edit-and-Approve note as a decision_memory without blocking approval", async () => {
+    const fake = new FakeSupabase();
+    const tenantId = "t1";
+    seedAgents(fake, tenantId);
+    fake.table("leads").push({ id: "lead-1", tenant_id: tenantId, company_name: "テスト株式会社", status: "in_review" });
+    fake.table("opportunities").push({ id: "opp-1", tenant_id: tenantId, lead_id: "lead-1", amount: 300000, status: "pending_approval" });
+    fake.table("approval_requests").push({
+      id: "appr-1",
+      tenant_id: tenantId,
+      type: "sales_outreach",
+      subject_type: "opportunity",
+      subject_id: "opp-1",
+      title: "x",
+      status: "pending",
+    });
+
+    const ctx = makeCtx(fake, tenantId);
+    const result = await decideApproval(ctx, "appr-1", "approve", undefined, "料金は据え置きで先方に伝えること");
+    expect(result.status).toBe("approved");
+
+    const memories = fake.table("decision_memories");
+    expect(memories).toHaveLength(1);
+    expect(memories[0].category).toBe("sales_outreach_edit");
+    expect(memories[0].note).toBe("料金は据え置きで先方に伝えること");
+  });
+
   it("refuses to re-decide an approval that is no longer pending", async () => {
     const fake = new FakeSupabase();
     fake.table("approval_requests").push({

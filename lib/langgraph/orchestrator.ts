@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import type { SupabaseServerClient } from "@/lib/server/tenant";
-import { createGraphRunCtx } from "@/lib/langgraph/context";
+import { createGraphRunCtx, emitEvent } from "@/lib/langgraph/context";
 import { SupabaseCheckpointSaver } from "@/lib/langgraph/checkpointer";
 import { buildLeadGenerationGraph } from "@/lib/langgraph/graphs/leadGeneration";
 import { buildSalesGraph } from "@/lib/langgraph/graphs/sales";
@@ -70,6 +70,8 @@ export async function runBusinessGraph(params: RunBusinessGraphParams): Promise<
   const checkpointer = new SupabaseCheckpointSaver(supabase, tenantId, workflowRunId);
   const config = { configurable: { thread_id: threadId }, recursionLimit: 100 };
 
+  await emitEvent(ctx, { eventType: "workflow.started", message: `${GRAPH_LABEL[graphName]}を開始`, payload: { graphName, subjectType, subjectId } });
+
   try {
     const finalState = await invokeGraph(graphName, ctx, checkpointer, input, config);
     const status = (finalState.status as string) ?? "completed";
@@ -79,6 +81,12 @@ export async function runBusinessGraph(params: RunBusinessGraphParams): Promise<
       .update({ status, current_node: (finalState.currentNode as string) ?? null, state: finalState })
       .eq("id", workflowRunId)
       .eq("tenant_id", tenantId);
+
+    await emitEvent(ctx, {
+      eventType: status === "waiting_human" ? "workflow.waiting_human" : status === "failed" ? "workflow.failed" : "workflow.completed",
+      message: `${GRAPH_LABEL[graphName]}が${status === "waiting_human" ? "人間の承認待ちで一時停止" : status === "failed" ? "失敗" : "完了"}`,
+      payload: { graphName, currentNode: finalState.currentNode ?? null },
+    });
 
     if (graphName === "onboarding_graph" && status === "completed" && finalState.projectId) {
       await runBusinessGraph({
@@ -94,9 +102,22 @@ export async function runBusinessGraph(params: RunBusinessGraphParams): Promise<
     return finalState;
   } catch (err) {
     await supabase.from("workflow_runs").update({ status: "failed" }).eq("id", workflowRunId).eq("tenant_id", tenantId);
+    const message = err instanceof Error ? err.message : String(err);
+    await emitEvent(ctx, { eventType: "workflow.failed", message: `${GRAPH_LABEL[graphName]}が失敗: ${message}` });
     throw err;
   }
 }
+
+const GRAPH_LABEL: Record<GraphName, string> = {
+  lead_generation_graph: "Lead Generation",
+  sales_graph: "Sales",
+  contract_graph: "Contract Review",
+  onboarding_graph: "Onboarding",
+  execution_graph: "Execution",
+  delivery_graph: "Delivery",
+  measurement_graph: "Measurement",
+  renewal_graph: "Renewal",
+};
 
 /**
  * Durable-execution recovery: rebuilds the same graph/checkpointer/thread
@@ -116,14 +137,21 @@ export async function resumeBusinessGraph(supabase: SupabaseServerClient, tenant
   const ctx = createGraphRunCtx(supabase, tenantId, workflowRunId);
   const checkpointer = new SupabaseCheckpointSaver(supabase, tenantId, workflowRunId);
   const config = { configurable: { thread_id: runRow.thread_id as string }, recursionLimit: 100 };
+  const graphName = runRow.graph_name as GraphName;
 
-  const finalState = await invokeGraph(runRow.graph_name as GraphName, ctx, checkpointer, null, config);
+  await emitEvent(ctx, { eventType: "workflow.resumed", message: `${GRAPH_LABEL[graphName]}をCheckpointから再開` });
+
+  const finalState = await invokeGraph(graphName, ctx, checkpointer, null, config);
   const status = (finalState.status as string) ?? "completed";
   await supabase
     .from("workflow_runs")
     .update({ status, current_node: (finalState.currentNode as string) ?? null, state: finalState })
     .eq("id", workflowRunId)
     .eq("tenant_id", tenantId);
+  await emitEvent(ctx, {
+    eventType: status === "waiting_human" ? "workflow.waiting_human" : status === "failed" ? "workflow.failed" : "workflow.completed",
+    message: `${GRAPH_LABEL[graphName]}が${status === "waiting_human" ? "人間の承認待ちで一時停止" : status === "failed" ? "失敗" : "完了"}`,
+  });
   return finalState;
 }
 

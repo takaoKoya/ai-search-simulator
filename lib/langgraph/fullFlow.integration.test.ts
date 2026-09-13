@@ -111,6 +111,16 @@ describe("Phase 1 vertical slice: lead to delivered", () => {
       "task.created",
       "qa.passed",
       "delivery.completed",
+      "lead.researched",
+      "lead.scored",
+      "critic.reviewed",
+      "workflow.started",
+      "workflow.waiting_human",
+      "workflow.completed",
+      "contract.reviewed",
+      "task.started",
+      "task.completed",
+      "qa.started",
     ]) {
       expect(eventTypes).toContain(expected);
     }
