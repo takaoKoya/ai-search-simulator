@@ -12,6 +12,9 @@
 
 export type AgentTaskType =
   | "company_research"
+  | "website_diagnosis_lite"
+  | "sales_hypothesis"
+  | "sales_draft"
   | "sales_strategy"
   | "contract_review"
   | "critic_review"
@@ -59,6 +62,12 @@ export class TemplateProvider implements AIProvider {
     switch (taskType) {
       case "company_research":
         return this.companyResearch(context);
+      case "website_diagnosis_lite":
+        return this.websiteDiagnosisLite(context);
+      case "sales_hypothesis":
+        return this.salesHypothesis(context);
+      case "sales_draft":
+        return this.salesDraft(context);
       case "sales_strategy":
         return this.salesStrategy(context);
       case "contract_review":
@@ -110,6 +119,121 @@ export class TemplateProvider implements AIProvider {
     };
   }
 
+  /**
+   * Simulated lite diagnosis, deterministically derived from the URL string.
+   * This does NOT fetch the real page — no outbound network call, no risk of
+   * treating fetched page content as instructions (§55). `simulated: true`
+   * is always present in the output so callers/UI never present this as a
+   * live crawl result. A real fetch-based diagnosis (with untrusted-content
+   * handling) is a Phase 4 item — see README.
+   */
+  private websiteDiagnosisLite(context: AgentTaskContext): AgentTaskResult {
+    const websiteUrl = context.websiteUrl as string | null | undefined;
+    if (!websiteUrl) {
+      return {
+        summary: "Webサイトが確認できないため診断をスキップしました。",
+        data: { hasWebsite: false, simulated: true, checks: null },
+      };
+    }
+    const https = websiteUrl.startsWith("https://");
+    const performanceScore = seededScore(websiteUrl + "speed", 30, 95);
+    const mobileFriendly = seededScore(websiteUrl + "mobile", 0, 1) === 1;
+    const hasContactForm = seededScore(websiteUrl + "contact", 0, 1) === 1;
+    const hasStructuredData = seededScore(websiteUrl + "structured", 0, 1) === 1;
+    const monthsSinceUpdate = seededScore(websiteUrl + "update", 0, 24);
+    const checks = {
+      httpStatus: 200,
+      https,
+      indexable: true,
+      mobileFriendly,
+      performanceScore,
+      hasContactForm,
+      hasStructuredData,
+      monthsSinceLastUpdate: monthsSinceUpdate,
+    };
+    return {
+      summary: `${websiteUrl} の簡易診断(simulated)。パフォーマンス${performanceScore}/100、最終更新から${monthsSinceUpdate}ヶ月経過と推定。`,
+      data: { hasWebsite: true, simulated: true, checks },
+    };
+  }
+
+  private salesHypothesis(context: AgentTaskContext): AgentTaskResult {
+    const companyName = String(context.companyName ?? "対象企業");
+    const weaknesses = (context.weaknesses as string[] | undefined) ?? [];
+    const digitalScore = context.digitalScore != null ? Number(context.digitalScore) : null;
+    const monthsSinceUpdate = context.monthsSinceUpdate != null ? Number(context.monthsSinceUpdate) : null;
+
+    const candidates: Array<{ service: string; reason: string }> = [];
+    if (digitalScore !== null && digitalScore < 50) {
+      candidates.push({ service: "SEO", reason: `デジタル成熟度${digitalScore}/100と低く、自然検索流入の改善余地が大きい` });
+    }
+    if (monthsSinceUpdate !== null && monthsSinceUpdate >= 6) {
+      candidates.push({ service: "AIO/GEO", reason: `サイトが${monthsSinceUpdate}ヶ月更新されておらず、AI検索での評価向上余地がある` });
+    }
+    if (weaknesses.some((w) => w.includes("問い合わせ"))) {
+      candidates.push({ service: "CRO", reason: "問い合わせ導線に課題があり、転換率改善の余地がある" });
+    }
+    if (candidates.length === 0) {
+      candidates.push({ service: "Web Renewal", reason: "具体的な課題データが不足しているため、サイト刷新を起点とした提案が妥当" });
+    }
+    const recommendedServices = candidates.slice(0, 3);
+
+    const observedProblem = weaknesses[0] ?? "詳細な課題は追加調査が必要（不明）";
+    const whyNow =
+      monthsSinceUpdate !== null && monthsSinceUpdate >= 6
+        ? `サイトが${monthsSinceUpdate}ヶ月更新されておらず、対応の緊急度が上がっている`
+        : "デジタル施策を見直すのに適したタイミングと判断";
+    const evidenceCount = [digitalScore !== null, weaknesses.length > 0, monthsSinceUpdate !== null].filter(Boolean).length;
+    const confidence = evidenceCount >= 2 ? "MEDIUM" : "LOW";
+    const amount = seededScore(companyName + "amount", 150_000, 500_000);
+
+    return {
+      summary: `${companyName}向けの営業仮説を作成（推奨: ${recommendedServices.map((r) => r.service).join(" / ")}）`,
+      data: {
+        observedProblem,
+        businessImpact: "問い合わせ経路が限定的で、機会損失が生じている可能性がある",
+        whyNow,
+        recommendedServices,
+        expectedOutcome: "問い合わせ数の増加とAI検索経由の露出改善",
+        confidence,
+        evidenceCount,
+        unknowns: ["正確な月間マーケティング予算", "社内のWeb担当者の有無"],
+        nextInformationNeeded: "現在のマーケティング予算感と意思決定者",
+        estimatedInitialValue: amount,
+        estimatedMonthlyValue: Math.round(amount * 0.6),
+        estimatedAnnualValue: Math.round(amount * 0.6 * 12),
+        // No service price table exists yet in this tenant — never fabricate one (§24).
+        priceRecommendation: null,
+      },
+    };
+  }
+
+  private salesDraft(context: AgentTaskContext): AgentTaskResult {
+    const companyName = String(context.companyName ?? "対象企業");
+    const observedProblem = String(context.observedProblem ?? "");
+    const recommendedServices = (context.recommendedServices as Array<{ service: string; reason: string }> | undefined) ?? [];
+    const primaryService = recommendedServices[0]?.service ?? "Web改善";
+
+    const subject = `${companyName}様へ：${primaryService}に関するご相談`;
+    const body = [
+      `${companyName} ご担当者様`,
+      "",
+      "初めてご連絡いたします。",
+      observedProblem
+        ? `貴社Webサイトを拝見し、${observedProblem}という点で改善のご支援ができる可能性があると考えご連絡いたしました。`
+        : "貴社のWeb活用について、ご支援できる可能性があると考えご連絡いたしました。",
+      "",
+      `弊社では${primaryService}を中心に、同様の課題を抱える企業様のご支援を行っております。よろしければ一度、貴社の状況に合わせた改善余地について、簡単にご説明する機会をいただけますと幸いです。`,
+      "",
+      "ご検討のほど、よろしくお願いいたします。",
+    ].join("\n");
+
+    return {
+      summary: `${companyName}向けの営業文Draftを作成しました（channel: email、送信はしていません）。`,
+      data: { subject, body, channel: "email" },
+    };
+  }
+
   private contractReview(context: AgentTaskContext): AgentTaskResult {
     const amount = Number(context.amount ?? 0);
     const findings: { field: string; note: string; risk: "LOW" | "MEDIUM" | "HIGH" }[] = [
@@ -138,7 +262,30 @@ export class TemplateProvider implements AIProvider {
     const subjectSummary = String(context.subjectSummary ?? "");
     const issues: string[] = [];
     if (subjectSummary.length < 10) issues.push("内容が簡潔すぎ、根拠の提示が不足している");
-    if (/断言|保証/.test(subjectSummary)) issues.push("成果保証と取られかねない表現を含む");
+    if (/断言|保証|確実に|100%|絶対/.test(subjectSummary)) issues.push("成果を確約しかねない表現を含む");
+
+    // Structured checks used by the Sales Hypothesis / Sales Draft critics
+    // (spec §25, §49) — only evaluated when the caller supplies the field.
+    const recommendedServicesCount = context.recommendedServicesCount as number | undefined;
+    if (recommendedServicesCount !== undefined && recommendedServicesCount > 3) {
+      issues.push("推奨サービスが3件を超えている(過多)");
+    }
+    const confidence = context.confidence as string | undefined;
+    const evidenceCount = context.evidenceCount as number | undefined;
+    if (confidence === "HIGH" && (evidenceCount ?? 0) < 2) {
+      issues.push("Confidenceが高いにもかかわらずEvidenceが不足している");
+    }
+    if (context.hasPriceNumbers && !context.hasPriceReason) {
+      issues.push("価格の根拠が不足している");
+    }
+    const draftLength = context.draftLength as number | undefined;
+    if (draftLength !== undefined && draftLength > 800) {
+      issues.push("営業文が長すぎる");
+    }
+    if (context.containsPii) {
+      issues.push("不必要な個人情報を含んでいる可能性がある");
+    }
+
     const passed = issues.length === 0;
     return {
       summary: passed ? "Critic: 差し戻し無し。承認プロセスへ進めて問題ありません。" : `Critic: ${issues.length}件の差し戻し事由を検出。`,

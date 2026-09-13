@@ -162,3 +162,116 @@ board to something that reads as "AI employees actually working here":
   CSRF token is implemented for the new API routes.
 - `measurement_graph` / `renewal_graph` exist and run (manually triggered from a
   project's card), but are not part of the tested Phase 1 golden path.
+
+### AI Sales Department — Lead Discovery & Sales Intelligence (Phase 3)
+
+Phase 3 adds an AI-driven Lead Discovery & Sales Intelligence pipeline: AI agents
+autonomously discover, research, score, and prepare sales candidates end-to-end, stopping
+at CEO approval and a non-sent sales draft. **No outreach is ever sent** — there is no
+email/DM/form-submission code path anywhere in this phase; the pipeline's terminal state
+is `READY_FOR_OUTREACH` plus a `sales_drafts` row a human must copy out and send manually.
+
+#### Setup
+
+1. Apply `supabase/migrations/20260915000000_ai_sales_department_phase3.sql` (after the
+   Phase 1 migration). It backfills a default ICP profile and `scorer`/`writer` agents
+   for existing tenants, so no re-signup is needed.
+2. Visit `/office`, open **Leads**, and use "Discoveryを開始" with a labeled test fixture
+   (A/B/C) — see §81 of the product brief: one candidate is proven end-to-end before any
+   batch discovery is attempted. Real market data is not available in this sandbox (no
+   search/directory API key), so fixtures are the only discovery source today.
+
+#### Architecture
+
+- **No real external search/directory API is wired in** (`lib/sales/candidateSource.ts`):
+  building an unattributed scraper would risk exactly what the brief prohibits (ToS
+  violations, robots.txt disregard, CAPTCHA/login bypass). `ManualCandidateSource` (a
+  human-typed company) and `TestFixtureCandidateSource` (three fixtures, always flagged
+  `testMode: true`) are the only sources. A real, ToS-compliant search/directory API is a
+  documented Phase 4 follow-up.
+- **`lead_discovery_graph`** (`lib/langgraph/graphs/leadDiscovery.ts`): load ICP → generate
+  search strategy → candidate discovery → normalize + create lead → duplicate/exclusion
+  check → basic research → website check (simulated, `simulated: true` always present,
+  never a real fetch) → lead scoring → if HOT/WARM: deep research → sales hypothesis →
+  Critic review (capped at 3 retries via `lib/sales/criticGate.ts`) → CEO approval
+  request; if NURTURE/LOW: archived/on-hold, never reaching a human. CEO approval chains
+  directly into **`sales_draft_graph`**, which generates and Critic-reviews a
+  `sales_drafts` row (channel/subject/body) and stops at `DRAFT_READY` — again, never
+  sent.
+- **Deterministic Lead Scoring** (`lib/sales/scoring.ts`): 7 weighted axes (ICP Fit,
+  Business Potential, Web Problem Severity, Timing Signal, Service Fit, Contactability,
+  Confidence) summing to a configurable 100, each with a human-readable reason — no LLM
+  "vibes," fully reproducible from the same inputs (`computeLeadScore` is a pure
+  function). Weights and HOT/WARM/NURTURE/LOW thresholds are per-tenant, editable in the
+  ICP settings panel.
+- **Company normalization & duplicate detection** (`lib/sales/normalize.ts`,
+  `lib/sales/duplicates.ts`): domain is the strong dedup key; a name-only match without a
+  domain match is surfaced as `POSSIBLE_DUPLICATE` for a human to confirm rather than
+  silently merged. `checkDuplicate` takes an `excludeLeadId` so a candidate's own
+  just-inserted lead row is never mistaken for a pre-existing duplicate of itself (a real
+  bug caught by `lib/langgraph/graphs/leadDiscovery.integration.test.ts` during this
+  phase's own testing and fixed the same session).
+- **Do Not Contact** (`lib/sales/dnc.ts`, `do_not_contact` table): checked before any
+  research/AI cost is spent on a candidate; CEO's "Do Not Contact" decision on a
+  `sales_lead` approval writes to this list automatically.
+- **Decision Learning** (`lib/server/approvals.ts` `maybeFlagRuleCandidate`): scans recent
+  sales_lead reject/do-not-contact decisions for a repeated industry pattern and flags the
+  matching `decision_memory` as a `rule_candidate` plus a
+  `decision.rule_candidate_detected` event — it never rewrites ICP targeting rules
+  itself, only surfaces the suggestion for a human.
+- **Price honesty**: `salesHypothesis()` always returns `priceRecommendation: null` since
+  no real service price table exists yet in this tenant's schema — the AI is never
+  allowed to fabricate one.
+- **Consolidated schema** (see `supabase/ER.md` for the full writeup): company research,
+  growth signals, and the (simulated) website diagnosis all reuse the existing `findings`
+  table rather than new narrow tables; a Sales Discovery Run reuses `workflow_runs`
+  (its budget/counters live in the existing `state` jsonb column); `icp_profiles` merges
+  the brief's "Sales Target Profile" and "ICP" concepts into one table; duplicate-check
+  verdicts live directly on `leads` (`duplicate_status`/`duplicate_of_lead_id`) instead of
+  a separate table.
+- **CEO decisions on a `sales_lead` approval**: Approve, Edit and Approve, Reject/Request
+  Revision, Hold, and Do Not Contact — all five wired end-to-end in `CeoInbox.tsx`, the
+  Lead Detail page's Approvals tab, and `lib/server/approvals.ts` (`hold`/`do_not_contact`
+  are validated as sales_lead-only actions server-side).
+- **Lead Detail** (`/office/leads/[id]`, `lib/server/leadDetail.ts`): 9 tabs — Overview,
+  Research, Website Analysis, Score (full per-axis breakdown), Sales Strategy, Evidence,
+  Activity, Approvals, History (workflow runs + Decision Memory).
+- **ICP / Do Not Contact settings** (`components/office/SalesSettingsPanel.tsx`): edits
+  ICP targeting fields plus score weights/qualification thresholds (as JSON — the scoring
+  engine itself normalizes/validates them at read time) and lets a human register a
+  Do Not Contact entry directly.
+- **Cost tracking**: every AI-consuming stage of both graphs adds a nominal simulated cost
+  to `leads.ai_cost_yen` (`lib/sales/cost.ts`) — a real number that accumulates
+  consistently today, ready to swap for real token-based billing once a billed provider
+  is wired in.
+
+#### Tests
+
+`lib/sales/scoring.test.ts`, `lib/sales/duplicates.test.ts`, `lib/sales/criticGate.test.ts`
+unit-test normalization, hard exclusion, the scoring engine, duplicate detection (including
+the self-match regression above), and the revision-loop cap in isolation.
+`lib/langgraph/graphs/leadDiscovery.integration.test.ts` runs the full vertical slice
+against the fake in-memory Supabase for all three §61 seed scenarios: a qualifying
+candidate through to CEO approval and a `DRAFT_READY` draft, a Do Not Contact match
+blocking a candidate before it is ever scored, and a below-WARM score being archived
+without ever reaching a human.
+
+#### Known limitations
+
+- No real search/directory API is connected — Phase 3 can only discover candidates via
+  manual entry or the three labeled test fixtures. Wiring in a real, ToS-compliant
+  source (and only then scaling from 1 → 5 → 20 → batch discovery, per §81) is the
+  primary Phase 4 item.
+- `websiteDiagnosisLite` is a deterministic simulation, not a real page fetch — it never
+  makes an outbound request, so it also never has to handle fetched content as
+  `UNTRUSTED_CONTENT`. A real fetch-based diagnosis is a Phase 4 item and must treat
+  fetched page content as data, never as instructions to an agent.
+- `salesHypothesis()` never proposes a concrete price because no service price table
+  exists in this tenant's schema yet; building one (and wiring `priceRecommendation`
+  through with an explicit "estimated, not a quote" label) is a Phase 4 item.
+- The Sales Settings panel edits score weights/qualification thresholds as raw JSON
+  rather than a bespoke slider UI.
+- As with Phase 1/2, no live Supabase project was available in this sandbox — Phase 3 is
+  verified via the automated tests above plus a real local Postgres run of the migration
+  (schema apply, RLS, trigger/backfill behavior — see `supabase/ER.md`), not a real
+  browser session.

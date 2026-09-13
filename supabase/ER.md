@@ -103,3 +103,49 @@ Workflow: `workflow_runs` / `workflow_checkpoints` / `workflow_checkpoint_writes
   - 新規ユーザー2名がそれぞれ独立したテナント・部署・AI社員一式を持つこと
   - 別テナントの`agents`/`tenants`が`select`で一切見えないこと（テナント分離）
   - 他テナントの`tenant_id`を指定した`insert`がRLS違反として拒否されること（IDOR対策）
+
+---
+
+## AI Sales Department (Phase 3) — `20260915000000_ai_sales_department_phase3.sql`
+
+Lead Discovery & Sales Intelligence。**テーブル分割を避け、既存の汎用テーブルへ極力寄せている**点が設計上の要点。
+
+### 意図的に新規テーブルを作らなかったもの
+
+- 企業調査・成長シグナル・簡易サイト診断 → すべて既存`findings`を再利用（`type`列で `company_research` / `growth_signal` / `website_diagnosis_lite` を区別）
+- Sales Discovery Run → 新テーブルを作らず既存`workflow_runs`を再利用
+  (`graph_name='lead_discovery_graph'`, `subject_type='sales_discovery_run'`)。
+  予算・カウンタ・生成した検索戦略は`state` jsonbに保持。
+- `sales_target_profiles`とICPは同一概念のため`icp_profiles`1本に統合。
+- 重複判定結果はLeadに1件しか持たないため`leads.duplicate_status` /
+  `duplicate_of_lead_id`列に直接保持（`lead_duplicates`テーブルは作らない）。
+- Recommended ServicesとSales Hypothesisは常に1組で生成されるため
+  `lead_sales_hypotheses`1本に統合。
+
+### 新規テーブル
+
+`icp_profiles`（Sales Target + ICP + スコア重み + 閾値）/ `do_not_contact` /
+`lead_scores`（多軸スコア内訳をjsonbで保持、`score_version`付き）/
+`lead_sales_hypotheses` / `sales_drafts`（送信は行わない下書きのみ）。
+
+### `leads`への追加列
+
+`domain` / `normalized_company_name` / `normalized_domain` / `region` /
+`source_type` / `source_url` / `source_name` / `discovered_at` /
+`duplicate_status` / `duplicate_of_lead_id` / `discovery_stage`
+（Phase 1の`status`列とは独立。既存Phase 1フローに一切影響しない）/
+`icp_profile_id` / `score_version` / `ai_cost_yen` / `test_mode` /
+`last_verified_at`。
+
+### Agentロースター
+
+`handle_new_tenant_for_user()`に `scorer`(Lead Scoring) / `writer`(Sales Writer)
+を追加し、**既存テナントにも同一migration内でバックフィル**（ローカルPostgresで
+「Phase3適用前に作成済みのテナントが14→16エージェントになり、営業部へ自動配属
+されること」を実機検証済み）。
+
+### RLS
+
+新規5テーブルすべて`is_tenant_member`/`has_tenant_role`パターンを踏襲。
+他テナントの`tenant_id`を指定した`icp_profiles`への`insert`がRLS違反で
+拒否されることを実機検証済み。

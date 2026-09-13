@@ -14,6 +14,7 @@ import ActivityFeed from "@/components/office/ActivityFeed";
 import Timeline from "@/components/office/Timeline";
 import Header, { type NotificationItem } from "@/components/office/Header";
 import LeftNav from "@/components/office/LeftNav";
+import SalesSettingsPanel from "@/components/office/SalesSettingsPanel";
 
 const POLL_INTERVAL_MS = 4000;
 
@@ -54,6 +55,7 @@ export default function OfficeApp({
   const [drawerAgentId, setDrawerAgentId] = useState<string | null>(null);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [leadsOpen, setLeadsOpen] = useState(false);
+  const [salesSettingsOpen, setSalesSettingsOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState<MobileTab>("agents");
   const [toast, setToast] = useState<string | null>(null);
   const [connectionOk, setConnectionOk] = useState(true);
@@ -303,8 +305,14 @@ export default function OfficeApp({
           onStartResearch={async (id) => {
             await callApi(`/api/leads/${id}/start-research`);
           }}
+          onStartDiscovery={async (scenario) => {
+            await callApi("/api/sales/discovery-runs", { body: JSON.stringify({ source: "test_fixture", scenario }) });
+          }}
+          onOpenSettings={() => setSalesSettingsOpen(true)}
         />
       )}
+
+      {salesSettingsOpen && <SalesSettingsPanel onClose={() => setSalesSettingsOpen(false)} />}
     </div>
   );
 }
@@ -430,16 +438,22 @@ function LeadsPanel({
   onClose,
   onCreate,
   onStartResearch,
+  onStartDiscovery,
+  onOpenSettings,
 }: {
   leads: OfficeState["leads"];
   onClose: () => void;
   onCreate: (companyName: string, industry: string, website: string) => Promise<void>;
   onStartResearch: (id: string) => Promise<void>;
+  onStartDiscovery: (scenario: "A" | "B" | "C") => Promise<void>;
+  onOpenSettings: () => void;
 }) {
   const [companyName, setCompanyName] = useState("");
   const [industry, setIndustry] = useState("");
   const [website, setWebsite] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [discoveryScenario, setDiscoveryScenario] = useState<"A" | "B" | "C">("A");
+  const [discovering, setDiscovering] = useState(false);
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
@@ -450,9 +464,50 @@ function LeadsPanel({
       >
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-bold">Leads</h2>
-          <button onClick={onClose} className="rounded-md px-2 py-1 text-sm hover:bg-white/10" style={{ color: "var(--office-text-secondary)" }}>
-            閉じる
-          </button>
+          <div className="flex items-center gap-2">
+            <button onClick={onOpenSettings} className="rounded-md px-2 py-1 text-xs" style={{ color: "var(--office-ai-accent)" }}>
+              ICP / DNC設定
+            </button>
+            <button onClick={onClose} className="rounded-md px-2 py-1 text-sm hover:bg-white/10" style={{ color: "var(--office-text-secondary)" }}>
+              閉じる
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-2 rounded-lg border p-3" style={{ borderColor: "var(--office-border)", background: "var(--office-surface)" }}>
+          <p className="text-xs font-semibold" style={{ color: "var(--office-text-secondary)" }}>
+            AI Sales Department — 案件候補の自動発見
+          </p>
+          <p className="text-[11px]" style={{ color: "var(--office-text-muted)" }}>
+            実際の外部検索APIは未接続のため、まずはラベル付きの合成候補（test fixture）1件で市場探索〜スコアリング〜CEO承認までの一連の流れを確認できます。
+          </p>
+          <div className="flex items-center gap-2">
+            <select
+              value={discoveryScenario}
+              onChange={(e) => setDiscoveryScenario(e.target.value as "A" | "B" | "C")}
+              className="rounded-md border p-1.5 text-[12px]"
+              style={{ borderColor: "var(--office-border)", background: "var(--office-bg-primary)" }}
+            >
+              <option value="A">Fixture A（HOT想定）</option>
+              <option value="B">Fixture B（WARM想定）</option>
+              <option value="C">Fixture C（除外/重複想定）</option>
+            </select>
+            <button
+              disabled={discovering}
+              onClick={async () => {
+                setDiscovering(true);
+                try {
+                  await onStartDiscovery(discoveryScenario);
+                } finally {
+                  setDiscovering(false);
+                }
+              }}
+              className="rounded-md px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
+              style={{ background: "var(--office-ai-accent)" }}
+            >
+              Discoveryを開始
+            </button>
+          </div>
         </div>
 
         <form
@@ -507,7 +562,9 @@ function LeadsPanel({
           {leads.map((lead) => (
             <li key={lead.id} className="rounded-lg border p-3" style={{ borderColor: "var(--office-border)", background: "var(--office-surface)" }}>
               <div className="flex items-center justify-between">
-                <p className="font-semibold">{lead.company_name}</p>
+                <Link href={`/office/leads/${lead.id}`} className="font-semibold hover:underline">
+                  {lead.company_name}
+                </Link>
                 <span className="text-[11px]" style={{ color: "var(--office-text-muted)" }}>
                   {lead.status}
                 </span>

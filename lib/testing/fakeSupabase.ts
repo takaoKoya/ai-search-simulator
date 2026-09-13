@@ -53,6 +53,18 @@ class FakeQueryBuilder implements PromiseLike<{ data: unknown; error: null }> {
     return this;
   }
 
+  /** Supports the one shape our code uses: a jsonb `->>` path like "state->>leadId" with operator "eq". */
+  filter(colPath: string, operator: string, value: unknown): this {
+    const match = colPath.match(/^(\w+)->>(\w+)$/);
+    if (!match || operator !== "eq") throw new Error(`FakeSupabase.filter: unsupported ${colPath} ${operator}`);
+    const [, col, jsonKey] = match;
+    this.filters.push((row) => {
+      const obj = row[col] as Record<string, unknown> | null | undefined;
+      return obj != null && String(obj[jsonKey]) === String(value);
+    });
+    return this;
+  }
+
   lt(col: string, val: unknown): this {
     this.filters.push((row) => (row[col] as string) < (val as string));
     return this;

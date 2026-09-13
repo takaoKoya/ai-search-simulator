@@ -3,7 +3,7 @@ import { withRoute } from "@/lib/server/withRoute";
 import { ValidationError } from "@/lib/server/errors";
 import { decideApproval, type ApprovalAction } from "@/lib/server/approvals";
 
-const VALID_ACTIONS: ApprovalAction[] = ["approve", "reject", "revise"];
+const VALID_ACTIONS: ApprovalAction[] = ["approve", "reject", "revise", "hold", "do_not_contact"];
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   return withRoute(async () => {

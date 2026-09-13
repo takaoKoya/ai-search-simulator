@@ -2,6 +2,15 @@
 
 import { useState } from "react";
 
+export interface SalesLeadInfo {
+  score: number | null;
+  qualification: string | null;
+  recommendedServices: Array<{ service: string; reason: string }>;
+  estimatedInitialValue: number | null;
+  estimatedMonthlyValue: number | null;
+  whyNow: string | null;
+}
+
 export interface InboxApproval {
   id: string;
   type: string;
@@ -16,12 +25,21 @@ export interface InboxApproval {
   subjectLabel?: string | null;
   amount?: number | null;
   urgency?: "CRITICAL" | "HIGH" | "NORMAL" | "LOW";
+  salesLeadInfo?: SalesLeadInfo | null;
 }
 
 const TYPE_LABEL: Record<string, string> = {
   sales_outreach: "営業承認",
+  sales_lead: "Lead承認",
   contract_approval: "契約承認",
   delivery: "納品承認",
+};
+
+const QUALIFICATION_VAR: Record<string, string> = {
+  HOT: "--office-status-failed",
+  WARM: "--office-status-warning",
+  NURTURE: "--office-ai-accent",
+  LOW: "--office-text-muted",
 };
 
 const RISK_VAR: Record<string, string> = {
@@ -46,10 +64,16 @@ export default function CeoInbox({
   onClose,
 }: {
   approvals: InboxApproval[];
-  onDecide: (id: string, action: "approve" | "reject" | "revise", reason?: string, editNote?: string) => Promise<void>;
+  onDecide: (
+    id: string,
+    action: "approve" | "reject" | "revise" | "hold" | "do_not_contact",
+    reason?: string,
+    editNote?: string
+  ) => Promise<void>;
   onClose: () => void;
 }) {
   const [openReasonFor, setOpenReasonFor] = useState<string | null>(null);
+  const [reasonAction, setReasonAction] = useState<"reject" | "revise" | "do_not_contact">("reject");
   const [reason, setReason] = useState("");
   const [openEditFor, setOpenEditFor] = useState<string | null>(null);
   const [editNote, setEditNote] = useState("");
@@ -59,7 +83,12 @@ export default function CeoInbox({
     (a, b) => (URGENCY_ORDER[a.urgency ?? "LOW"] ?? 3) - (URGENCY_ORDER[b.urgency ?? "LOW"] ?? 3)
   );
 
-  async function handle(id: string, action: "approve" | "reject" | "revise", withReason?: string, withEditNote?: string) {
+  async function handle(
+    id: string,
+    action: "approve" | "reject" | "revise" | "hold" | "do_not_contact",
+    withReason?: string,
+    withEditNote?: string
+  ) {
     setBusyId(id);
     try {
       await onDecide(id, action, withReason, withEditNote);
@@ -121,12 +150,25 @@ export default function CeoInbox({
                 {a.subjectLabel && (
                   <div className="col-span-2 flex gap-1">
                     <dt style={{ color: "var(--office-text-muted)" }}>会社/案件:</dt>
-                    <dd>{a.subjectLabel}</dd>
+                    <dd>
+                      {a.subjectLabel}
+                      {a.type === "sales_lead" && (
+                        <a
+                          href={`/office/leads/${a.subject_id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="ml-2 underline"
+                          style={{ color: "var(--office-ai-accent)" }}
+                        >
+                          詳細を見る
+                        </a>
+                      )}
+                    </dd>
                   </div>
                 )}
                 {typeof a.amount === "number" && (
                   <div className="flex gap-1">
-                    <dt style={{ color: "var(--office-text-muted)" }}>想定金額:</dt>
+                    <dt style={{ color: "var(--office-text-muted)" }}>想定金額(estimated):</dt>
                     <dd>¥{a.amount.toLocaleString()}</dd>
                   </div>
                 )}
@@ -135,6 +177,33 @@ export default function CeoInbox({
                   <dd>{new Date(a.created_at).toLocaleString("ja-JP")}</dd>
                 </div>
               </dl>
+
+              {a.type === "sales_lead" && a.salesLeadInfo && (
+                <div
+                  className="mt-2 space-y-1 rounded-lg border p-2 text-[11px]"
+                  style={{ borderColor: "var(--office-border)", background: "var(--office-bg-primary)" }}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    {typeof a.salesLeadInfo.score === "number" && (
+                      <span style={{ color: "var(--office-text-secondary)" }}>Lead Score: {a.salesLeadInfo.score}</span>
+                    )}
+                    {a.salesLeadInfo.qualification && (
+                      <span
+                        className="rounded-full px-2 py-0.5 font-bold"
+                        style={{ color: `var(${QUALIFICATION_VAR[a.salesLeadInfo.qualification] ?? "--office-text-muted"})` }}
+                      >
+                        {a.salesLeadInfo.qualification}
+                      </span>
+                    )}
+                  </div>
+                  {a.salesLeadInfo.recommendedServices.length > 0 && (
+                    <p style={{ color: "var(--office-text-secondary)" }}>
+                      推奨サービス: {a.salesLeadInfo.recommendedServices.map((s) => s.service).join(" / ")}
+                    </p>
+                  )}
+                  {a.salesLeadInfo.whyNow && <p style={{ color: "var(--office-text-secondary)" }}>なぜ今か: {a.salesLeadInfo.whyNow}</p>}
+                </div>
+              )}
 
               {a.description && (
                 <p className="mt-2 whitespace-pre-line text-[13px]" style={{ color: "var(--office-text-secondary)" }}>
@@ -170,6 +239,7 @@ export default function CeoInbox({
                 <button
                   disabled={busyId === a.id}
                   onClick={() => {
+                    setReasonAction("reject");
                     setOpenReasonFor(openReasonFor === a.id ? null : a.id);
                     setOpenEditFor(null);
                   }}
@@ -178,6 +248,30 @@ export default function CeoInbox({
                 >
                   Reject / Request Revision
                 </button>
+                {a.type === "sales_lead" && (
+                  <>
+                    <button
+                      disabled={busyId === a.id}
+                      onClick={() => handle(a.id, "hold")}
+                      className="rounded-lg border px-3 py-1.5 text-[12px] font-semibold disabled:opacity-50"
+                      style={{ borderColor: "var(--office-border)", color: "var(--office-status-warning)" }}
+                    >
+                      Hold
+                    </button>
+                    <button
+                      disabled={busyId === a.id}
+                      onClick={() => {
+                        setReasonAction("do_not_contact");
+                        setOpenReasonFor(openReasonFor === a.id ? null : a.id);
+                        setOpenEditFor(null);
+                      }}
+                      className="rounded-lg border px-3 py-1.5 text-[12px] font-semibold disabled:opacity-50"
+                      style={{ borderColor: "var(--office-border)", color: "var(--office-status-failed)" }}
+                    >
+                      Do Not Contact
+                    </button>
+                  </>
+                )}
               </div>
 
               {openEditFor === a.id && (
@@ -206,28 +300,45 @@ export default function CeoInbox({
                   <textarea
                     value={reason}
                     onChange={(e) => setReason(e.target.value)}
-                    placeholder="却下・差し戻し理由（必須・Decision Memoryとして保存されます）"
+                    placeholder={
+                      reasonAction === "do_not_contact"
+                        ? "今後営業しない理由（必須・Do Not Contactに登録されます）"
+                        : "却下・差し戻し理由（必須・Decision Memoryとして保存されます）"
+                    }
                     className="w-full rounded-md border p-2 text-[12px]"
                     style={{ borderColor: "var(--office-border)", background: "var(--office-surface)" }}
                     rows={3}
                   />
                   <div className="flex gap-2">
-                    <button
-                      disabled={busyId === a.id || !reason.trim()}
-                      onClick={() => handle(a.id, "revise", reason)}
-                      className="rounded-lg px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
-                      style={{ background: "var(--office-status-waiting-human)" }}
-                    >
-                      Request Revision
-                    </button>
-                    <button
-                      disabled={busyId === a.id || !reason.trim()}
-                      onClick={() => handle(a.id, "reject", reason)}
-                      className="rounded-lg px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
-                      style={{ background: "var(--office-status-failed)" }}
-                    >
-                      Reject
-                    </button>
+                    {reasonAction === "do_not_contact" ? (
+                      <button
+                        disabled={busyId === a.id || !reason.trim()}
+                        onClick={() => handle(a.id, "do_not_contact", reason)}
+                        className="rounded-lg px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
+                        style={{ background: "var(--office-status-failed)" }}
+                      >
+                        Do Not Contact
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          disabled={busyId === a.id || !reason.trim()}
+                          onClick={() => handle(a.id, "revise", reason)}
+                          className="rounded-lg px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
+                          style={{ background: "var(--office-status-waiting-human)" }}
+                        >
+                          Request Revision
+                        </button>
+                        <button
+                          disabled={busyId === a.id || !reason.trim()}
+                          onClick={() => handle(a.id, "reject", reason)}
+                          className="rounded-lg px-3 py-1.5 text-[12px] font-semibold text-white disabled:opacity-50"
+                          style={{ background: "var(--office-status-failed)" }}
+                        >
+                          Reject
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               )}

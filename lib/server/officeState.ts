@@ -25,6 +25,8 @@ export async function getOfficeState(ctx: TenantContext) {
     leadsRes,
     opportunitiesRes,
     contractsRes,
+    leadScoresRes,
+    leadHypothesesRes,
   ] = await Promise.all([
     supabase.from("departments").select("id, code, name, sort_order").eq("tenant_id", tenantId).order("sort_order"),
     supabase
@@ -78,6 +80,16 @@ export async function getOfficeState(ctx: TenantContext) {
       .order("created_at", { ascending: false }),
     supabase.from("opportunities").select("id, lead_id, amount, currency").eq("tenant_id", tenantId),
     supabase.from("contracts").select("id, opportunity_id").eq("tenant_id", tenantId),
+    supabase
+      .from("lead_scores")
+      .select("lead_id, total, qualification, created_at")
+      .eq("tenant_id", tenantId)
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("lead_sales_hypotheses")
+      .select("lead_id, recommended_services, estimated_initial_value, estimated_monthly_value, why_now, created_at")
+      .eq("tenant_id", tenantId)
+      .order("created_at", { ascending: false }),
   ]);
 
   for (const res of [
@@ -94,6 +106,8 @@ export async function getOfficeState(ctx: TenantContext) {
     leadsRes,
     opportunitiesRes,
     contractsRes,
+    leadScoresRes,
+    leadHypothesesRes,
   ]) {
     if (res.error) throw res.error;
   }
@@ -144,12 +158,58 @@ export async function getOfficeState(ctx: TenantContext) {
   const opportunityIdByContractId = new Map(contracts.map((c) => [c.id as string, c.opportunity_id as string]));
   const projectNameBySubjectId = new Map(projects.map((p) => [p.id as string, p.name as string]));
 
+  // Both queries are ordered by created_at desc, so the first row seen per
+  // lead is the latest score / hypothesis — no extra sort needed.
+  const latestScoreByLead = new Map<string, { total: number; qualification: string }>();
+  for (const s of leadScoresRes.data ?? []) {
+    const leadId = s.lead_id as string;
+    if (!latestScoreByLead.has(leadId)) latestScoreByLead.set(leadId, { total: s.total as number, qualification: s.qualification as string });
+  }
+  const latestHypothesisByLead = new Map<
+    string,
+    { recommendedServices: Array<{ service: string; reason: string }>; estimatedInitialValue: number | null; estimatedMonthlyValue: number | null; whyNow: string | null }
+  >();
+  for (const h of leadHypothesesRes.data ?? []) {
+    const leadId = h.lead_id as string;
+    if (!latestHypothesisByLead.has(leadId)) {
+      latestHypothesisByLead.set(leadId, {
+        recommendedServices: (h.recommended_services as Array<{ service: string; reason: string }>) ?? [],
+        estimatedInitialValue: (h.estimated_initial_value as number | null) ?? null,
+        estimatedMonthlyValue: (h.estimated_monthly_value as number | null) ?? null,
+        whyNow: (h.why_now as string | null) ?? null,
+      });
+    }
+  }
+
   const approvals = rawApprovals.map((a) => {
     let subjectLabel: string | null = null;
     let amount: number | null = null;
+    let salesLeadInfo: {
+      score: number | null;
+      qualification: string | null;
+      recommendedServices: Array<{ service: string; reason: string }>;
+      estimatedInitialValue: number | null;
+      estimatedMonthlyValue: number | null;
+      whyNow: string | null;
+    } | null = null;
     if (a.type === "sales_outreach") {
       subjectLabel = leadNameByOpportunityId.get(a.subject_id as string) ?? null;
       amount = (opportunities.find((o) => o.id === a.subject_id)?.amount as number | undefined) ?? null;
+    } else if (a.type === "sales_lead") {
+      const leadId = a.subject_id as string;
+      const lead = leads.find((l) => l.id === leadId);
+      const score = latestScoreByLead.get(leadId) ?? null;
+      const hyp = latestHypothesisByLead.get(leadId) ?? null;
+      subjectLabel = lead?.company_name ?? null;
+      amount = hyp?.estimatedInitialValue ?? hyp?.estimatedMonthlyValue ?? null;
+      salesLeadInfo = {
+        score: score?.total ?? null,
+        qualification: score?.qualification ?? null,
+        recommendedServices: hyp?.recommendedServices ?? [],
+        estimatedInitialValue: hyp?.estimatedInitialValue ?? null,
+        estimatedMonthlyValue: hyp?.estimatedMonthlyValue ?? null,
+        whyNow: hyp?.whyNow ?? null,
+      };
     } else if (a.type === "contract_approval") {
       const oppId = opportunityIdByContractId.get(a.subject_id as string);
       subjectLabel = oppId ? (leadNameByOpportunityId.get(oppId) ?? null) : null;
@@ -166,7 +226,7 @@ export async function getOfficeState(ctx: TenantContext) {
     else if (risk === "MEDIUM" || ageHours > 8) urgency = "NORMAL";
     else urgency = "LOW";
 
-    return { ...a, subjectLabel, amount, urgency };
+    return { ...a, subjectLabel, amount, urgency, salesLeadInfo };
   });
 
   const agentToDepartmentId = new Map(assignments.map((a) => [a.agent_id as string, a.department_id as string]));
@@ -233,6 +293,7 @@ export async function getOfficeState(ctx: TenantContext) {
 
 const APPROVAL_TYPE_LABEL: Record<string, string> = {
   sales_outreach: "営業承認",
+  sales_lead: "Lead承認",
   contract_approval: "契約承認",
   delivery: "納品承認",
 };

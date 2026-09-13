@@ -10,10 +10,14 @@ import { buildExecutionGraph } from "@/lib/langgraph/graphs/execution";
 import { buildDeliveryGraph } from "@/lib/langgraph/graphs/delivery";
 import { buildMeasurementGraph } from "@/lib/langgraph/graphs/measurement";
 import { buildRenewalGraph } from "@/lib/langgraph/graphs/renewal";
+import { buildLeadDiscoveryGraph } from "@/lib/langgraph/graphs/leadDiscovery";
+import { buildSalesDraftGraph } from "@/lib/langgraph/graphs/salesDraft";
 
 export const GRAPH_NAMES = [
+  "lead_discovery_graph",
   "lead_generation_graph",
   "sales_graph",
+  "sales_draft_graph",
   "contract_graph",
   "onboarding_graph",
   "execution_graph",
@@ -109,8 +113,10 @@ export async function runBusinessGraph(params: RunBusinessGraphParams): Promise<
 }
 
 const GRAPH_LABEL: Record<GraphName, string> = {
+  lead_discovery_graph: "Lead Discovery",
   lead_generation_graph: "Lead Generation",
   sales_graph: "Sales",
+  sales_draft_graph: "Sales Draft",
   contract_graph: "Contract Review",
   onboarding_graph: "Onboarding",
   execution_graph: "Execution",
@@ -163,10 +169,14 @@ function invokeGraph(
   config: { configurable: { thread_id: string }; recursionLimit: number }
 ): Promise<Record<string, unknown>> {
   switch (graphName) {
+    case "lead_discovery_graph":
+      return buildLeadDiscoveryGraph(ctx, checkpointer).invoke(input, config);
     case "lead_generation_graph":
       return buildLeadGenerationGraph(ctx, checkpointer).invoke(input, config);
     case "sales_graph":
       return buildSalesGraph(ctx, checkpointer).invoke(input, config);
+    case "sales_draft_graph":
+      return buildSalesDraftGraph(ctx, checkpointer).invoke(input, config);
     case "contract_graph":
       return buildContractGraph(ctx, checkpointer).invoke(input, config);
     case "onboarding_graph":
