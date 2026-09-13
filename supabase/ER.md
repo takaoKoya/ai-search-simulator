@@ -66,3 +66,40 @@ erDiagram
 | users | 本人のみ | 不可（トリガー経由のみ） | 本人のみ | 不可 |
 | daily_tasks | 本人のみ | 本人のみ | 本人のみ | 本人のみ |
 | daily_logs | 本人のみ | 本人のみ | 不可（追記のみ） | 不可（追記のみ） |
+
+---
+
+## AI Company OS (Phase 1) — `20260913000000_ai_company_os_phase1.sql`
+
+YATTORU用の上記3テーブルとは独立した、Multi-Tenant「AI Company Operating System」用スキーマ。
+詳細は migration ファイル本体のコメントを参照。要点のみここに記す。
+
+### テナンシー
+
+- `tenants` / `memberships` (`tenant_id, user_id, role`) が全ての起点。
+- 新規ユーザーが `public.users` に作成される度に `handle_new_tenant_for_user()` トリガーが発火し、
+  そのユーザー専用の `tenants` 行(role=`owner`)・部署4つ・AI社員14体・部署配属を自動生成する。
+- `tenant_id` はアプリケーションコードからは信用しない。サーバー側で認証済みセッション→
+  `memberships` を引いて解決した値のみを使う（`lib/server/tenant.ts`）。
+
+### エンティティ
+
+Organization: `departments` / `agents` / `agent_department_assignments`
+Sales: `clients` / `leads` / `opportunities` / `contracts`
+Delivery: `projects` / `goals` / `kpis` / `project_team_members` / `initiatives` / `findings` / `tasks` / `deliverables`
+Approval: `approval_requests`（全ドメイン共通）/ `decision_memories`
+Workflow: `workflow_runs` / `workflow_checkpoints` / `workflow_checkpoint_writes`（LangGraph.js用カスタムCheckpointerの永続化先）/ `agent_runs` / `agent_events` / `tool_calls`
+
+### RLS方針
+
+- `public.is_tenant_member(tenant_id)` / `public.has_tenant_role(tenant_id, roles[])` という
+  `security definer` 関数を全テーブルのRLSポリシーで共通利用。
+- 業務テーブルは「同一テナントのmembershipを持つユーザーのみselect/insert/update」。deleteのみ
+  `owner`/`ceo`/`admin`ロールに限定。
+- `approval_requests` はselect/insertを全メンバーに許可しつつ、承認・却下（update）は
+  `owner`/`ceo`/`admin`ロールのみに制限（営業・契約・納品で承認テーブルを分けない）。
+- `decision_memories` は追記のみ（update/deleteポリシーなし）。
+- ローカルPostgres(16)で `auth.users`/`auth.uid()` をモックし、以下を実機検証済み:
+  - 新規ユーザー2名がそれぞれ独立したテナント・部署・AI社員一式を持つこと
+  - 別テナントの`agents`/`tenants`が`select`で一切見えないこと（テナント分離）
+  - 他テナントの`tenant_id`を指定した`insert`がRLS違反として拒否されること（IDOR対策）
