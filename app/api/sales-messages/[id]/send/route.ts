@@ -2,6 +2,7 @@ import { APPROVER_ROLES, assertRole, getTenantContext } from "@/lib/server/tenan
 import { withRoute } from "@/lib/server/withRoute";
 import { NotFoundError, ValidationError } from "@/lib/server/errors";
 import { getEmailConnector } from "@/lib/sales/emailConnector";
+import { verifySendPreconditions } from "@/lib/server/salesSendGate";
 
 /**
  * Final Send Gate (spec §11-12): the one place an email actually leaves the
@@ -14,6 +15,13 @@ import { getEmailConnector } from "@/lib/sales/emailConnector";
  * status = 'READY_TO_SEND'`), so under a race only one concurrent request
  * can win it; a second request (or a second click) sees the row already
  * SENT and returns the original result instead of sending twice.
+ *
+ * Re-verification before send (spec §45): approval still valid (not
+ * expired), recipient/subject/body unchanged since approval (Approval
+ * Snapshot Hash), and the lead is not newly Do Not Contact since approval
+ * was granted. Any mismatch sets the message to APPROVAL_INVALIDATED and
+ * refuses to send — a human must re-approve, this route never "sends
+ * anyway."
  */
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   return withRoute(async () => {
@@ -24,7 +32,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
 
     const { data: message, error } = await supabase
       .from("sales_messages")
-      .select("id, status, to_address, subject, body, lead_id, opportunity_id, channel, test_mode, provider, provider_message_id, provider_thread_id, sent_at")
+      .select("id, status, to_address, subject, body, lead_id, opportunity_id, channel, test_mode, provider, provider_message_id, provider_thread_id, sent_at, approval_request_id")
       .eq("id", id)
       .eq("tenant_id", tenantId)
       .maybeSingle();
@@ -40,6 +48,24 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     }
     if (!message.to_address) {
       throw new ValidationError("Message has no destination address");
+    }
+
+    const gateResult = await verifySendPreconditions(ctx, {
+      to_address: message.to_address as string | null,
+      subject: message.subject as string | null,
+      body: message.body as string | null,
+      lead_id: message.lead_id as string | null,
+      approval_request_id: message.approval_request_id as string | null,
+    });
+    if (!gateResult.ok) {
+      await supabase.from("sales_messages").update({ status: "APPROVAL_INVALIDATED" }).eq("id", id).eq("tenant_id", tenantId).eq("status", "READY_TO_SEND");
+      await supabase.from("agent_events").insert({
+        tenant_id: tenantId,
+        event_type: "approval.invalidated",
+        message: `送信前の再検証で承認が無効化されました（${gateResult.reason}）。再承認が必要です。`,
+        payload: { messageId: id, reason: gateResult.reason },
+      });
+      throw new ValidationError(`Approval is no longer valid (${gateResult.reason}). Re-approval is required before this can be sent.`);
     }
 
     const connector = await getEmailConnector({ supabase, tenantId, userId });

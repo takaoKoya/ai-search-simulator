@@ -232,6 +232,16 @@ export async function createApprovalRequest(
      */
     steps?: ApprovalStep[];
     policyCode?: string | null;
+    /**
+     * Approval Snapshot Hash (spec §45): a hash of the exact fields
+     * (recipient/subject/body/etc.) that must not change between approval
+     * and execution — see lib/server/approvalSnapshot.ts. `expiresAt`
+     * (ISO string) makes an approval stop being actionable after a fixed
+     * window even if nothing about the content changed. Both optional and
+     * omitted by every pre-Phase-5 call site.
+     */
+    snapshotHash?: string | null;
+    expiresAt?: string | null;
   }
 ): Promise<string> {
   const requestedByAgent = params.requestedByAgentCode ? await getAgentByCode(ctx, params.requestedByAgentCode) : null;
@@ -251,6 +261,8 @@ export async function createApprovalRequest(
       requested_by_agent_id: requestedByAgent?.id ?? null,
       status: "pending",
       ...(steps.length > 0 ? { steps, current_step: 0, policy_code: params.policyCode ?? null } : {}),
+      ...(params.snapshotHash ? { snapshot_hash: params.snapshotHash } : {}),
+      ...(params.expiresAt ? { expires_at: params.expiresAt } : {}),
     })
     .select("id")
     .single();

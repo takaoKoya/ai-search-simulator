@@ -8,6 +8,9 @@ import { checkOutreachDraft } from "@/lib/sales/outreachCritic";
 import { decideCriticVerdict } from "@/lib/sales/criticGate";
 import { addLeadCost } from "@/lib/sales/cost";
 import { computeApprovalSteps, loadApprovalPolicies } from "@/lib/server/approvalPolicy";
+import { computeSnapshotHash } from "@/lib/server/approvalSnapshot";
+
+const APPROVAL_EXPIRY_HOURS = 72;
 
 interface DraftData {
   subject: string;
@@ -271,6 +274,15 @@ export function buildSalesOutreachPrepGraph(ctx: GraphRunCtx, checkpointer: Supa
       const policies = await loadApprovalPolicies(ctx.supabase, ctx.tenantId);
       const { steps, policyCodes } = computeApprovalSteps(policies, [{ codePrefix: "sales_send", context: {} }]);
 
+      // Approval Snapshot Hash (spec §45): hashes exactly the fields the
+      // Final Send Gate (app/api/sales-messages/[id]/send/route.ts) will
+      // re-verify right before sending — if recipient/subject/body changed
+      // since this approval, or the approval expired, the send is blocked
+      // and re-approval is required rather than sending stale/altered
+      // content.
+      const snapshotHash = computeSnapshotHash({ to: rec.availableContact, subject: draft.subject, body: draft.body });
+      const expiresAt = new Date(Date.now() + APPROVAL_EXPIRY_HOURS * 3600_000).toISOString();
+
       const approvalId = await createApprovalRequest(ctx, {
         type: "sales_send",
         subjectType: "sales_message",
@@ -282,6 +294,8 @@ export function buildSalesOutreachPrepGraph(ctx: GraphRunCtx, checkpointer: Supa
         requestedByAgentCode: "outreach",
         steps,
         policyCode: policyCodes[0] ?? null,
+        snapshotHash,
+        expiresAt,
       });
       await ctx.supabase.from("sales_messages").update({ approval_request_id: approvalId }).eq("id", state.messageId).eq("tenant_id", ctx.tenantId);
 
