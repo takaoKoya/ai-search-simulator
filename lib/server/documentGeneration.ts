@@ -4,6 +4,8 @@ import { NotFoundError, ValidationError } from "@/lib/server/errors";
 import { renderProposalPdf } from "@/lib/documents/proposalPdf";
 import { renderProposalPptx } from "@/lib/documents/proposalPptx";
 import type { ProposalDocumentInput } from "@/lib/documents/proposalDocument";
+import { renderMonthlyReportPdf } from "@/lib/documents/monthlyReportPdf";
+import type { MonthlyReportDocumentInput } from "@/lib/documents/monthlyReportDocument";
 import { encodeBytea } from "@/lib/server/bytea";
 
 export type GeneratedFileType = "PDF" | "PPTX";
@@ -99,6 +101,65 @@ export async function generateProposalFile(ctx: TenantContext, proposalId: strin
     event_type: "generated_file.created",
     message: `提案書の${fileType}を生成しました（${classification}）`,
     payload: { fileId: fileRow.id, proposalId, fileType, classification },
+  });
+
+  return { fileId: fileRow.id as string, classification };
+}
+
+const REPORT_CLIENT_VISIBLE_STATUSES = ["APPROVED", "CLIENT_PREVIEW", "DELIVERED"];
+
+/**
+ * Renders + stores a Monthly Report PDF from `monthly_reports.content_json`
+ * (Growth Loop spec §36-38, §51) — same immutable-source-of-truth pattern as
+ * generateProposalFile above. Only CLIENT_VISIBLE once the report itself has
+ * cleared Manager/CEO approval; a DRAFT/CRITIC_REVIEW/QA report's file stays
+ * INTERNAL even if generated for internal preview.
+ */
+export async function generateMonthlyReportFile(ctx: TenantContext, monthlyReportId: string): Promise<{ fileId: string; classification: string }> {
+  const { supabase, tenantId } = ctx;
+
+  const { data: report, error } = await supabase
+    .from("monthly_reports")
+    .select("id, project_id, status, content_json")
+    .eq("id", monthlyReportId)
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!report) throw new NotFoundError("Monthly report not found");
+  if (!report.content_json) throw new ValidationError("Monthly report has no content_json yet (nothing to render)");
+
+  const input = report.content_json as unknown as MonthlyReportDocumentInput;
+  const fileData = await renderMonthlyReportPdf(input);
+  const checksum = crypto.createHash("sha256").update(fileData).digest("hex");
+  const classification = REPORT_CLIENT_VISIBLE_STATUSES.includes(report.status as string) ? "CLIENT_VISIBLE" : "INTERNAL";
+
+  const { data: project } = await supabase.from("projects").select("client_id").eq("id", report.project_id as string).eq("tenant_id", tenantId).maybeSingle();
+
+  const { data: fileRow, error: insertError } = await supabase
+    .from("generated_files")
+    .insert({
+      tenant_id: tenantId,
+      client_id: project?.client_id ?? null,
+      project_id: report.project_id,
+      entity_type: "monthly_report",
+      entity_id: monthlyReportId,
+      version_id: monthlyReportId,
+      file_type: "PDF",
+      storage_path: `monthly-reports/${monthlyReportId}.pdf`,
+      file_data: encodeBytea(fileData),
+      checksum,
+      byte_size: fileData.length,
+      classification,
+    })
+    .select("id")
+    .single();
+  if (insertError || !fileRow) throw insertError ?? new Error("Failed to store generated file");
+
+  await supabase.from("agent_events").insert({
+    tenant_id: tenantId,
+    event_type: "generated_file.created",
+    message: `月次レポートのPDFを生成しました（${classification}）`,
+    payload: { fileId: fileRow.id, monthlyReportId, fileType: "PDF", classification },
   });
 
   return { fileId: fileRow.id as string, classification };

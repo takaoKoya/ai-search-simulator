@@ -3,6 +3,7 @@ import { addToDoNotContact } from "@/lib/sales/dnc";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/lib/server/errors";
 import type { TenantContext } from "@/lib/server/tenant";
 import type { ApprovalStep } from "@/lib/server/approvalPolicy";
+import { computeCooldownUntil } from "@/lib/server/upsell";
 
 import { getEmailConnector } from "@/lib/sales/emailConnector";
 
@@ -21,7 +22,7 @@ const REASON_REQUIRED_ACTIONS: ApprovalAction[] = ["reject", "revise", "do_not_c
  * (spec §27-28 for sales_lead, §10 for sales_send/sales_reply — the CEO can
  * always park or blacklist a company at any point in the sales pipeline).
  */
-const HOLD_DNC_ALLOWED_TYPES = ["sales_lead", "sales_send", "sales_reply", "proposal_approval", "deal_won"];
+const HOLD_DNC_ALLOWED_TYPES = ["sales_lead", "sales_send", "sales_reply", "proposal_approval", "deal_won", "upsell_opportunity"];
 
 const STATUS_BY_ACTION: Record<ApprovalAction, string> = {
   approve: "approved",
@@ -296,6 +297,27 @@ async function applyNonApproval(ctx: TenantContext, approval: ApprovalRow, actio
       }
     }
   }
+  if (approval.type === "monthly_report") {
+    const status = action === "revise" ? "REVISION" : action === "reject" ? "REJECTED" : undefined;
+    if (status) {
+      await supabase.from("monthly_reports").update({ status }).eq("id", approval.subject_id).eq("tenant_id", tenantId);
+    }
+    return;
+  }
+
+  if (approval.type === "upsell_opportunity") {
+    if (action === "reject") {
+      const cooldownUntil = computeCooldownUntil(new Date(), 90);
+      await supabase
+        .from("upsell_opportunities")
+        .update({ status: "REJECTED", rejected_reason: reason ?? null, cooldown_until: cooldownUntil.toISOString().slice(0, 10) })
+        .eq("id", approval.subject_id)
+        .eq("tenant_id", tenantId);
+    } else if (action === "hold") {
+      await supabase.from("upsell_opportunities").update({ status: "ON_HOLD" }).eq("id", approval.subject_id).eq("tenant_id", tenantId);
+    }
+    return;
+  }
   // "delivery" rejection: leave the project active for rework; no automated action beyond the decision_memory.
 }
 
@@ -488,6 +510,69 @@ async function applyApproval(ctx: TenantContext, approval: ApprovalRow): Promise
       input: { projectId: approval.subject_id },
     });
     return { delivery: deliveryResult };
+  }
+
+  if (approval.type === "monthly_report") {
+    // APPROVED here means internally approved (Manager+CEO chain) — the
+    // actual "hand this to the client" send is still a separate explicit
+    // Human Action (spec §55-56), same split as project delivery.
+    await supabase.from("monthly_reports").update({ status: "APPROVED" }).eq("id", approval.subject_id).eq("tenant_id", tenantId);
+    return { monthlyReportId: approval.subject_id, approvedForDelivery: true };
+  }
+
+  if (approval.type === "upsell_opportunity") {
+    // Opportunity Conversion (spec §79): an approved upsell becomes a new
+    // Sales Opportunity on the *existing* pipeline, not a parallel one.
+    const { data: upsell, error } = await supabase
+      .from("upsell_opportunities")
+      .select("id, client_id, recommended_service, problem, business_impact, estimated_value")
+      .eq("id", approval.subject_id)
+      .eq("tenant_id", tenantId)
+      .single();
+    if (error || !upsell) throw error ?? new Error("Upsell opportunity not found");
+
+    const { data: client } = await supabase.from("clients").select("name, industry").eq("id", upsell.client_id as string).eq("tenant_id", tenantId).maybeSingle();
+
+    // Opportunities require a lead_id (existing sales schema) — an upsell has
+    // no cold-outreach lead, so a lightweight "already a client" lead row is
+    // created to satisfy that FK without inventing a parallel data model.
+    const { data: leadRow, error: leadError } = await supabase
+      .from("leads")
+      .insert({
+        tenant_id: tenantId,
+        company_name: (client?.name as string | undefined) ?? "既存クライアント",
+        industry: (client?.industry as string | undefined) ?? null,
+        source: "upsell_expansion",
+        status: "won",
+      })
+      .select("id")
+      .single();
+    if (leadError || !leadRow) throw leadError ?? new Error("Failed to create expansion lead");
+
+    const { data: oppRow, error: oppError } = await supabase
+      .from("opportunities")
+      .insert({
+        tenant_id: tenantId,
+        lead_id: leadRow.id,
+        client_id: upsell.client_id,
+        stage: "QUALIFIED",
+        services: [{ service: upsell.recommended_service, reason: upsell.problem }],
+        estimated_value: upsell.estimated_value ?? null,
+        notes: `Upsell Opportunity由来: ${upsell.business_impact ?? upsell.problem}`,
+      })
+      .select("id")
+      .single();
+    if (oppError || !oppRow) throw oppError ?? new Error("Failed to create expansion opportunity");
+
+    await supabase.from("upsell_opportunities").update({ status: "APPROVED", converted_opportunity_id: oppRow.id }).eq("id", approval.subject_id).eq("tenant_id", tenantId);
+    await supabase.from("agent_events").insert({
+      tenant_id: tenantId,
+      event_type: "upsell.converted",
+      message: `アップセル提案を新規Sales Opportunityへ変換しました`,
+      payload: { upsellOpportunityId: approval.subject_id, opportunityId: oppRow.id },
+    });
+
+    return { opportunityId: oppRow.id, converted: true };
   }
 
   throw new ValidationError(`Unknown approval type: ${approval.type}`);

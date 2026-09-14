@@ -47,10 +47,12 @@ const TYPE_LABEL: Record<string, string> = {
   deal_won: "受注確定承認",
   contract_approval: "契約承認",
   delivery: "納品承認",
+  monthly_report: "月次レポート承認",
+  upsell_opportunity: "アップセル提案承認",
 };
 
 /** Hold/Do Not Contact are valid across every sales-domain approval, not just sales_lead. */
-const HOLD_DNC_TYPES = new Set(["sales_lead", "sales_send", "sales_reply", "proposal_approval", "deal_won"]);
+const HOLD_DNC_TYPES = new Set(["sales_lead", "sales_send", "sales_reply", "proposal_approval", "deal_won", "upsell_opportunity"]);
 
 const QUALIFICATION_VAR: Record<string, string> = {
   HOT: "--office-status-failed",

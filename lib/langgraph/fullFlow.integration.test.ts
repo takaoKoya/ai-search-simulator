@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { FakeSupabase } from "@/lib/testing/fakeSupabase";
 import { runBusinessGraph } from "@/lib/langgraph/orchestrator";
 import { decideApproval } from "@/lib/server/approvals";
+import { confirmProjectDelivery } from "@/lib/server/deliveryConfirmation";
 import type { TenantContext } from "@/lib/server/tenant";
 
 function seedAgents(fake: FakeSupabase, tenantId: string) {
@@ -88,14 +89,26 @@ describe("Phase 1 vertical slice: lead to delivered", () => {
     const deliveryApproval = fake.table("approval_requests").find((a) => a.type === "delivery")!;
     expect(deliveryApproval.status).toBe("pending");
 
-    // 4. CEO approves delivery -> project delivered.
+    // 4. CEO approves delivery -> project is internally READY_FOR_DELIVERY
+    // (Growth Loop spec §2-3: internal approval is not the same event as
+    // actually handing the work to the client).
     const deliveryDecision = await decideApproval(ctx, deliveryApproval.id as string, "approve");
     expect(deliveryDecision.status).toBe("approved");
+
+    const readyProject = fake.table("projects").find((p) => p.id === project.id)!;
+    expect(readyProject.status).toBe("ready_for_delivery");
+    expect(fake.table("deliverables").filter((d) => d.project_id === project.id).every((d) => d.status === "approved")).toBe(true);
+
+    // 5. Human Delivery: the explicit action that reaches DELIVERED.
+    await confirmProjectDelivery(ctx, project.id as string, { deliveryChannel: "email", recipient: "client@example.com" });
 
     const deliveredProject = fake.table("projects").find((p) => p.id === project.id)!;
     expect(deliveredProject.status).toBe("delivered");
     const deliveredDeliverables = fake.table("deliverables").filter((d) => d.project_id === project.id);
     expect(deliveredDeliverables.every((d) => d.status === "delivered")).toBe(true);
+    const deliveryRecord = fake.table("delivery_records").find((r) => r.project_id === project.id)!;
+    expect(deliveryRecord).toBeTruthy();
+    expect(deliveryRecord.delivery_channel).toBe("email");
 
     // Full activity trail exists and is timestamp-ordered material for the Activity Feed / Timeline.
     const eventTypes = fake.table("agent_events").map((e) => e.event_type);
@@ -110,7 +123,8 @@ describe("Phase 1 vertical slice: lead to delivered", () => {
       "team.created",
       "task.created",
       "qa.passed",
-      "delivery.completed",
+      "delivery.ready",
+      "delivery.confirmed",
       "lead.researched",
       "lead.scored",
       "critic.reviewed",
@@ -126,7 +140,7 @@ describe("Phase 1 vertical slice: lead to delivered", () => {
     }
 
     // Every workflow_run/agent_run/event/approval/decision row stayed scoped to this tenant.
-    for (const table of ["workflow_runs", "agent_runs", "agent_events", "approval_requests", "opportunities", "contracts", "projects", "tasks", "deliverables"]) {
+    for (const table of ["workflow_runs", "agent_runs", "agent_events", "approval_requests", "opportunities", "contracts", "projects", "tasks", "deliverables", "delivery_records"]) {
       expect(fake.table(table).every((row) => row.tenant_id === tenantId)).toBe(true);
     }
 

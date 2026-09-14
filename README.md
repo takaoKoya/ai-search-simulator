@@ -615,3 +615,198 @@ cases for Approval Snapshot Hash invalidation and Business-Time SLA computation.
   is verified via the automated tests above plus real local Postgres runs of all three
   new migrations (schema apply, new-status-value acceptance,
   nullable-column-with-FK-intact — see `supabase/ER.md`), not a real browser session.
+
+### Growth Loop — Measurement, Reporting, Renewal, Upsell (Phase 7)
+
+Phase 7 turns "wins and executes a deal" into "measures outcomes, explains them, and
+drives its own continuation/expansion revenue": READY_FOR_DELIVERY/DELIVERED are split
+into distinct states, a delivered project's KPIs get a Measurement Plan and Baseline
+Snapshot, Effect Evaluation runs on deterministic rules (never an LLM's own success
+judgment), a Monthly Report goes through Critic → QA → Manager/CEO approval → a
+separate Human Delivery, and the same pass checks Contract Renewal due-dates/health and
+detects Upsell candidates that convert into new Sales Opportunities on the *existing*
+pipeline once approved.
+
+#### Setup
+
+1. Apply `20260924000000_growth_loop_phase7.sql` after Phase 5's three migrations.
+2. No new env vars — the Growth Loop scheduler reuses `CRON_SECRET` +
+   `SUPABASE_SERVICE_ROLE_KEY` already required for `/api/cron/*` (Phase 5). A fourth
+   cron route, `/api/cron/growth-loop-check`, should be scheduled hourly-or-slower
+   alongside the existing three.
+3. KPIs with no connector are entered via `POST /api/kpis/[id]/manual-value`
+   (`{value, reason}`) — always audited, tagged `source: "manual"`.
+
+#### Architecture
+
+- **READY_FOR_DELIVERY vs DELIVERED** (spec §2-4): `projects.status` gained
+  `ready_for_delivery` as a distinct state before `delivered`. The pre-existing
+  `delivery_graph` (Phase 1) now only reaches `ready_for_delivery` once the internal
+  Manager+CEO "delivery" approval clears; a new `delivery_records` table (client,
+  deliverable ids, channel, recipient, snapshot hash, notes) plus the explicit
+  `POST /api/projects/[id]/delivery/confirm` Human Action
+  (`lib/server/deliveryConfirmation.ts`) is what actually reaches `delivered` — and
+  that same call is what fires the Measurement Trigger (`measurement_graph`).
+- **Measurement Plan / Baseline / KPI Snapshot** (spec §5-18): `measurement_plans`
+  (one per KPI, `PLANNED → WAITING → READY_TO_EVALUATE → COMPLETED/INSUFFICIENT_DATA`)
+  and `kpi_snapshots` (`BASELINE`/`CURRENT`/`CUSTOM`, each carrying its own
+  `data_quality`) are new, first-class tables — a Baseline is fixed the moment
+  measurement starts tracking a KPI and never re-derived later even if
+  `kpis.current_value` moves on. `lib/server/measurement.ts`'s `computeChange()` /
+  `computeTargetGap()` are zero-division-safe by construction (a `baseline = 0` never
+  produces a `%` change, only an absolute one — no `Infinity` anywhere).
+  `resolveMeasurementStartDelayDays()` encodes the SEO(14d)/Content(28d)/CRO(28d)/
+  Ads(7d) trigger table from spec §4 (via a `kpis.initiative_type` hint; unset
+  defaults to 14d).
+- **Effect Evaluation is a Deterministic Rule, not an LLM decision** (spec §19-23):
+  `evaluateEffect()` classifies SUCCESS/PARTIAL_SUCCESS/NO_SIGNIFICANT_CHANGE/
+  NEGATIVE/INCONCLUSIVE/INSUFFICIENT_DATA purely from baseline/current/target/
+  direction/data-quality/minimum-data-requirement, with a Confidence
+  (HIGH/MEDIUM/LOW) that a confounding-factor flag downgrades by exactly one step.
+  `measurement_graph`'s `evaluate_effect` step still runs through `runAgentStep()`
+  (attributed to the `mina`/Analytics agent for AI Office visibility) but the
+  classification itself is this pure function, unit-tested against the spec's own
+  Test Cases A (10→17 vs target 20 ⇒ PARTIAL_SUCCESS), B (missing data ⇒
+  INSUFFICIENT_DATA, never a guessed number), and C (10→6 ⇒ NEGATIVE + a CRITICAL
+  anomaly).
+- **Anomaly Detection** (spec §26-29): `detectAnomaly()` is a plain, direction-aware
+  percentage-move threshold (±10/15/25/40% ⇒ INFO/WARNING/HIGH/CRITICAL) — no ML,
+  per the spec's own "高度MLを初期から入れない". A HIGH/CRITICAL anomaly triggers a
+  Root Cause candidate (`root_cause_analysis` provider task, stored as a `findings`
+  row of `type='root_cause_candidate'`, reusing Phase 1's `findings` table rather than
+  a new one) and, on CRITICAL, an `anomaly.critical_alert` event surfaced to the CEO/
+  Manager feed — this vertical slice does not yet add a dedicated push/email channel
+  for it (see Known limitations).
+- **Monthly Reporting Cycle** (spec §34-53): `reporting_cycles` (unique per
+  `project + period_start`, so a scheduler tick never double-drafts the same month)
+  and `monthly_reports` (immutable once APPROVED/CLIENT_PREVIEW/DELIVERED, via the
+  exact same `content_json` + `BEFORE UPDATE` trigger pattern as Phase 5's
+  proposals/estimates) carry the report through `DRAFT → CRITIC_REVIEW/REVISION → QA →
+  MANAGER_REVIEW → CEO_REVIEW → APPROVED → DELIVERED`. `content_json`
+  (`lib/documents/monthlyReportDocument.ts`) is already client-safe by construction —
+  no cost/margin/critic notes are ever written into it — and is rendered to a real PDF
+  (`lib/documents/monthlyReportPdf.ts`, pdfkit) via `generateMonthlyReportFile()`
+  (same INTERNAL/CLIENT_VISIBLE classification-by-status rule as Phase 5's proposal
+  files). `GET /api/monthly-reports/[id]` (Client Preview) selects only client-safe
+  columns at the API layer, not just the UI (spec §163) — `critic_notes`/`qa_notes`
+  are excluded from that response entirely. `POST /api/monthly-reports/[id]/deliver`
+  is the separate, explicit Human Send that reaches `DELIVERED` and closes the
+  `reporting_cycle` — approval alone never sends anything to the client, same
+  Approve-vs-Send split as project delivery.
+- **Renewal Management + Account Health** (spec §62-71): `contract_renewals`
+  (unique per `contract + current_end_date`) tracks `NOT_DUE → UPCOMING → …`;
+  `computeRenewalDueStatus()` enters `UPCOMING` once inside the earliest of the
+  90/60/30-day trigger windows. `computeRenewalHealth()` is a deterministic,
+  always-explained (never a bare score, spec §67) GREEN/YELLOW/RED score from KPI
+  achievement ratio, open Critical anomalies, and (where trackable) client sentiment/
+  payment/margin — the latter three have no data source in this sandbox yet (no
+  cost-tracking, attendance, or payments system exists) and simply don't contribute a
+  risk point rather than being guessed.
+- **Upsell Detection → Critic → Approval → Opportunity Conversion** (spec §72-82,
+  §140-143): `renewal_graph`'s `detect_upsell` node infers a candidate service from a
+  KPI showing NEGATIVE or PARTIAL_SUCCESS (a persistent gap, per the spec's own
+  Test Case A "still short of target ⇒ propose CRO"), then runs
+  `checkUpsellDuplicate()` (an open candidate or an active Cooldown for the same
+  client+service silently skips re-detection) and `criticUpsellCandidate()` (rejects a
+  service already inside the client's current contract scope — Test Case E — a
+  missing stated Client Benefit, or a Client-Fatigue limit breach) before a
+  `upsell_opportunities` row and Manager+CEO approval request are even created — a
+  Critic-failed candidate never reaches a human. Approving it
+  (`lib/server/approvals.ts`'s `applyApproval` for `upsell_opportunity`) converts it
+  into a **new Sales Opportunity on the existing pipeline** (spec §79): a lightweight
+  "already a client" `leads` row (`source: "upsell_expansion"`) satisfies the
+  pre-existing `opportunities.lead_id NOT NULL` constraint without inventing a
+  parallel sales data model, and the new `opportunities` row starts at `QUALIFIED`
+  (skipping cold-outreach stages) carrying the recommended service/estimated value. A
+  human reject (Test Case F) records the reason and starts a 90-day Cooldown
+  (`computeCooldownUntil()`).
+- **Scheduler** (spec §123-125): `POST /api/cron/growth-loop-check` sweeps every
+  tenant's `ready_for_delivery`/`delivered` projects and re-runs `measurement_graph` +
+  `renewal_graph`, wrapped in the same `runBackgroundJob()` idempotency lock as the
+  Phase 5 cron jobs; a single project's failure is caught and logged without aborting
+  the sweep for the rest (spec §125 — a connector/KPI failure must never break the
+  whole cycle). Both graphs are independently idempotent per period
+  (`measurement_plans`' terminal-status guard, `reporting_cycles`'/
+  `contract_renewals`' unique-per-period constraints), so an overlapping or repeated
+  tick never double-drafts a report or double-detects the same renewal/upsell.
+- **AI Office / Project Room integration**: the `mina`(Analytics/Measurement)/
+  `repo`(Report)/`kuro`(Critic)/`qa`/`renewal`(new)/`upsell`(new) agents all run
+  through the existing `runAgentStep()`/`agent_events` instrumentation, so Growth
+  Loop activity shows up in the Activity Feed (new `growth` filter tab) exactly like
+  every other agent action. Project Room gained a **Growth Loop** panel (Measurement
+  Plan status/evaluation, Monthly Report versions/status, Renewal due-date/health,
+  Upsell Opportunities) and a **Human Delivery** button that appears once a project
+  reaches `ready_for_delivery`. CEO Inbox recognizes the two new approval types
+  (`monthly_report`, `upsell_opportunity`), including Hold.
+
+#### Tests
+
+New unit tests: `measurement.test.ts` (zero-division safety, KPI status
+classification, Effect Evaluation against spec Test Cases A/B/C, Anomaly Detection
+direction-awareness), `renewalRisk.test.ts` (due-date trigger window, Test Case D,
+health-score explanation), `upsell.test.ts` (duplicate/cooldown guard — Test Case F,
+Critic rejection — Test Case E, Client Fatigue limit).
+`lib/langgraph/graphs/growthLoop.integration.test.ts` chains the entire vertical slice
+against the fake in-memory Supabase — Human Delivery → Baseline → manual current-KPI
+input → scheduler-equivalent evaluation (PARTIAL_SUCCESS) → Monthly Report Draft →
+Critic → QA → Manager+CEO approval → Client Preview (asserts no internal notes leak
+into `content_json`) → Human Delivery of the report (real CLIENT_VISIBLE PDF) →
+Renewal Due detection → Upsell Detection → Critic → Manager+CEO approval → Opportunity
+Conversion — plus the two auto-reject/human-reject edge cases (E, F) as separate
+cases. The pre-existing Phase 1 `fullFlow.integration.test.ts` was updated for the
+READY_FOR_DELIVERY/DELIVERED split (it now calls `confirmProjectDelivery()` as its
+final step, same as a real Human Delivery would). All 285 tests pass; `npx tsc
+--noEmit`, `npx eslint .`, and `npm run build` are clean.
+
+#### Known limitations
+
+- **No real analytics connectors** (GA4/GSC/Google Ads/Semrush/Clarity/GBP) exist yet
+  — every KPI in this phase is `source: "manual"` or whatever a prior phase's
+  simulated pipeline wrote to `kpis.current_value`. The `kpi_snapshots.source` column
+  and `kpis.source` check-constraint already enumerate the target connectors so this
+  is a additive Phase 8 item, not a schema change.
+- **Client Portal, a dedicated Measurement/Report/Renewal/Upsell/Executive Dashboard
+  UI, and an Account Room page are not built this phase** — the underlying data
+  (measurement_plans, monthly_reports, contract_renewals, upsell_opportunities,
+  delivery_records) is fully modeled, RLS-protected, and exercised end-to-end by the
+  vertical-slice test above, and surfaced minimally inside the existing Project Room's
+  new "Growth Loop" panel + CEO Inbox — but the five dedicated "Center" screens the
+  product brief describes (§116-119, §176-180) and a standalone Executive/Account
+  Health dashboard are a Phase 8 UI item.
+- **MRR/ARR/NRR/GRR, Client Profitability (margin), and Expansion Score are not
+  computed** — no cost-tracking, billing, or payment system exists in this codebase
+  yet, so `computeRenewalHealth()`'s margin/payment factors simply never contribute a
+  risk point rather than being guessed, and the Executive Dashboard's financial
+  rollups (spec §86-90, §147-148) have no real inputs to compute from yet.
+  `lib/sales/pricing.ts`'s existing internal-cost/margin math is the only
+  profitability data this codebase has, and it is estimate-level, not account-level.
+- **Client sentiment, meeting-attendance tracking, and payment status** have no data
+  source (no Client Feedback table, no meeting-attendance field, no billing system),
+  so `computeRenewalHealth()` treats them as unknown (never guessed) rather than
+  penalizing or crediting a health score for them.
+- **A single measurement window per KPI per delivery, not a rolling monthly
+  re-baseline** — `ensure_measurement_plans` only opens a new plan once the previous
+  one for that KPI reaches a terminal status; a genuinely period-over-period (MoM/YoY)
+  re-baselining scheduler refinement is a Phase 8 item, though `comparison_type` on
+  `measurement_plans` already reserves the enum values for it.
+- **Report output is PDF only** — PPTX/DOCX monthly report export, brand-specific
+  templates, and Client Comment/Decision-Request threads on a delivered report are not
+  built this phase (the `generated_files`/`delivery_packages` infrastructure they'd
+  reuse already exists from Phase 5).
+- Fully-automatic client send/contract renewal/price change, Stripe/freee/
+  MoneyForward billing, advanced predictive/ML churn models, and a dedicated
+  Renewal/Upsell Proposal document distinct from the existing Proposal Engine remain
+  explicitly out of scope (per the product brief itself, §175) — Renewal/Upsell
+  Proposals are designed to reuse the existing Proposal/Estimate engine once a human
+  decides to act on an approved Upsell Opportunity or Renewal.
+- As with every prior phase, no live Supabase project was available in this sandbox —
+  Phase 7 is verified via the automated tests above (including the full vertical-slice
+  integration test) against the fake in-memory Supabase, plus a real local Postgres 16
+  run of all 8 migrations in order (schema apply, the new
+  `projects_status_check`/`generated_files_entity_type_check` constraints accepting
+  the new values and rejecting invalid ones, the `monthly_reports` immutability
+  trigger rejecting a content edit on an APPROVED row while a status-only transition
+  succeeds, RLS enabled with 4 policies on every new table, and two independent
+  tenants each getting their own `renewal`/`upsell` agents and
+  `monthly_report`/`upsell_opportunity` approval policies via the tenant-provisioning
+  trigger) — not a real browser session.

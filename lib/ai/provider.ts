@@ -29,7 +29,10 @@ export type AgentTaskType =
   | "meeting_prep"
   | "meeting_minutes"
   | "proposal_draft"
-  | "negotiation_analysis";
+  | "negotiation_analysis"
+  | "root_cause_analysis"
+  | "renewal_readiness"
+  | "upsell_detection";
 
 export interface AgentTaskContext {
   [key: string]: unknown;
@@ -103,6 +106,12 @@ export class TemplateProvider implements AIProvider {
         return this.proposalDraft(context);
       case "negotiation_analysis":
         return this.negotiationAnalysis(context);
+      case "root_cause_analysis":
+        return this.rootCauseAnalysis(context);
+      case "renewal_readiness":
+        return this.renewalReadiness(context);
+      case "upsell_detection":
+        return this.upsellDetection(context);
       default:
         throw new Error(`Unsupported task type: ${taskType satisfies never}`);
     }
@@ -639,6 +648,56 @@ export class TemplateProvider implements AIProvider {
         estimatedValue,
         requiresCeoJudgment: true,
       },
+    };
+  }
+
+  /**
+   * Root Cause Analysis (Growth Loop spec §24-25): only chains together
+   * candidates the caller has already computed/fetched (anomaly + related
+   * finding types) — never invents a cause with no evidence behind it, per
+   * "根拠のない原因断定禁止".
+   */
+  private rootCauseAnalysis(context: AgentTaskContext): AgentTaskResult {
+    const metric = String(context.metric ?? "KPI");
+    const relatedFindings = (context.relatedFindingTypes as string[] | undefined) ?? [];
+    const chain = [`${metric}の悪化を検知`, ...relatedFindings.map((f) => `関連するFinding: ${f}`)];
+    if (relatedFindings.length === 0) {
+      chain.push("関連データが不足しているため、原因候補は特定できません（UNKNOWN）");
+    }
+    return {
+      summary: relatedFindings.length > 0 ? `${metric}悪化の原因候補を${relatedFindings.length}件の関連データから整理しました。` : `${metric}悪化の原因候補は根拠不足のため特定できませんでした。`,
+      data: { chain, causalityLevel: relatedFindings.length > 0 ? "Likely Contribution" : "Unknown" },
+    };
+  }
+
+  /**
+   * Renewal Readiness summary (spec §65) — narrates the deterministic health
+   * score/reasons the caller already computed (lib/server/renewalRisk.ts);
+   * never re-derives or overrides the score itself.
+   */
+  private renewalReadiness(context: AgentTaskContext): AgentTaskResult {
+    const companyName = String(context.companyName ?? "対象企業");
+    const healthLevel = String(context.healthLevel ?? "GREEN");
+    const reasons = (context.reasons as string[] | undefined) ?? [];
+    return {
+      summary: `${companyName}の更新準備状況を整理しました(Health: ${healthLevel})。`,
+      data: { healthLevel, reasons, summary: `${companyName}様の契約更新に向けた健全度は${healthLevel}です。理由: ${reasons.join(" / ")}` },
+    };
+  }
+
+  /**
+   * Upsell candidate narrative (spec §72-74) — the recommended_service/
+   * problem/business_impact are supplied by the caller from real KPI Gap /
+   * Finding data; this only assembles the summary text, never fabricates the
+   * underlying evidence.
+   */
+  private upsellDetection(context: AgentTaskContext): AgentTaskResult {
+    const companyName = String(context.companyName ?? "対象企業");
+    const recommendedService = String(context.recommendedService ?? "追加施策");
+    const problem = String(context.problem ?? "");
+    return {
+      summary: `${companyName}向けに${recommendedService}のアップセル候補を作成しました。`,
+      data: { companyName, recommendedService, problem },
     };
   }
 }

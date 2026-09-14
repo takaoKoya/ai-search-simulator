@@ -20,8 +20,31 @@ const LIFECYCLE_LABEL: Record<ProjectLifecycleStage, string> = {
   execution: "Execution",
   review: "Review",
   ceo_approval: "CEO Approval",
+  ready_for_delivery: "Ready for Delivery",
   delivered: "Delivered",
   measurement: "Measurement",
+};
+
+const RENEWAL_STATUS_LABEL: Record<string, string> = {
+  NOT_DUE: "未該当",
+  UPCOMING: "更新時期接近",
+  PREPARING: "準備中",
+  CLIENT_REVIEW: "クライアント確認中",
+  NEGOTIATING: "交渉中",
+  RENEWED: "更新済み",
+  NOT_RENEWED: "非更新",
+  CANCELLED: "解約",
+};
+
+const UPSELL_STATUS_LABEL: Record<string, string> = {
+  DETECTED: "検出",
+  INTERNAL_REVIEW: "内部確認中",
+  APPROVAL_PENDING: "承認待ち",
+  APPROVED: "承認済み",
+  PROPOSED: "提案済み",
+  ACCEPTED: "受諾",
+  REJECTED: "却下",
+  ON_HOLD: "保留",
 };
 
 const TASK_STATUS_LABEL: Record<string, string> = {
@@ -88,7 +111,25 @@ export default function ProjectRoom({
     await refresh();
   }
 
-  const { project, team, tasks, goals, kpis, findings, approvals, deliverables, workflowRuns, events, progress, deliveryGate } = state;
+  async function confirmDelivery() {
+    if (!canApprove) {
+      setToast("この操作にはCEO/管理者権限が必要です");
+      return;
+    }
+    const res = await fetch(`/api/projects/${projectId}/delivery/confirm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deliveryChannel: "email" }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setToast(body.error ?? "エラーが発生しました");
+      return;
+    }
+    await refresh();
+  }
+
+  const { project, team, tasks, goals, kpis, findings, approvals, deliverables, workflowRuns, events, progress, deliveryGate, growth } = state;
   const currentStageIndex = PROJECT_LIFECYCLE.indexOf(project.lifecycleStage);
   const pendingApprovals = approvals.filter((a) => a.status === "pending");
 
@@ -309,6 +350,106 @@ export default function ProjectRoom({
               <GateRow label="QA Passed" passed={deliveryGate.qaPassed} />
               <GateRow label="CEO Approved" passed={deliveryGate.ceoApproved} />
             </ul>
+            {project.status === "ready_for_delivery" && (
+              <button
+                onClick={confirmDelivery}
+                className="mt-3 w-full rounded px-2 py-1.5 text-[12px] font-semibold text-white"
+                style={{ background: "var(--office-ai-accent)", color: "#04121f" }}
+              >
+                Human Delivery（納品を確定してGrowth Loopを開始）
+              </button>
+            )}
+            {project.status === "delivered" && growth.deliveryRecord && (
+              <p className="mt-2 text-[11px]" style={{ color: "var(--office-text-muted)" }}>
+                納品済み: {new Date(growth.deliveryRecord.delivered_at).toLocaleString("ja-JP")}（{growth.deliveryRecord.delivery_channel}）
+              </p>
+            )}
+          </Section>
+
+          {/* Growth Loop: Measurement / Report / Renewal / Upsell */}
+          <Section title="Growth Loop">
+            <div className="space-y-3 text-[12px]">
+              <div>
+                <p className="font-semibold" style={{ color: "var(--office-text-muted)" }}>
+                  Measurement
+                </p>
+                {growth.measurementPlans.length === 0 ? (
+                  <EmptyState message="Measurement Planはまだありません。" />
+                ) : (
+                  <ul className="space-y-1">
+                    {growth.measurementPlans.map((p) => (
+                      <li key={p.id} className="flex items-center justify-between">
+                        <span>{p.status}</span>
+                        {p.latest_evaluation && (
+                          <span style={{ color: p.latest_evaluation.evaluation === "NEGATIVE" ? "var(--office-status-failed)" : "var(--office-text-secondary)" }}>
+                            {p.latest_evaluation.evaluation}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div>
+                <p className="font-semibold" style={{ color: "var(--office-text-muted)" }}>
+                  Monthly Reports
+                </p>
+                {growth.monthlyReports.length === 0 ? (
+                  <EmptyState message="月次レポートはまだありません。" />
+                ) : (
+                  <ul className="space-y-1">
+                    {growth.monthlyReports.map((r) => (
+                      <li key={r.id} className="flex items-center justify-between">
+                        <span>
+                          {r.period_start} 〜 {r.period_end} (v{r.version})
+                        </span>
+                        <span style={{ color: r.status === "DELIVERED" ? "var(--office-status-completed)" : "var(--office-text-secondary)" }}>{r.status}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div>
+                <p className="font-semibold" style={{ color: "var(--office-text-muted)" }}>
+                  Renewal
+                </p>
+                {!growth.renewal ? (
+                  <EmptyState message="契約更新情報はまだありません。" />
+                ) : (
+                  <div>
+                    <p>
+                      {growth.renewal.current_end_date} まで — {RENEWAL_STATUS_LABEL[growth.renewal.status] ?? growth.renewal.status}
+                    </p>
+                    {growth.renewal.risk_level && (
+                      <p style={{ color: growth.renewal.risk_level === "RED" ? "var(--office-status-failed)" : growth.renewal.risk_level === "YELLOW" ? "var(--office-status-warning)" : "var(--office-status-completed)" }}>
+                        Health: {growth.renewal.risk_level}
+                        {growth.renewal.risk_factors?.reasons ? ` — ${growth.renewal.risk_factors.reasons.join(" / ")}` : ""}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <p className="font-semibold" style={{ color: "var(--office-text-muted)" }}>
+                  Upsell Opportunities
+                </p>
+                {growth.upsellOpportunities.length === 0 ? (
+                  <EmptyState message="アップセル候補はまだありません。" />
+                ) : (
+                  <ul className="space-y-1">
+                    {growth.upsellOpportunities.map((u) => (
+                      <li key={u.id} className="flex items-center justify-between">
+                        <span>{u.recommended_service}</span>
+                        <span style={{ color: "var(--office-text-secondary)" }}>{UPSELL_STATUS_LABEL[u.status] ?? u.status}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
           </Section>
 
           {/* Approvals */}

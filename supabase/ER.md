@@ -265,3 +265,89 @@ Postgres列に直接バイト列を保存。`storage_path`は将来S3/GCS移行�
 新規テーブルすべて既存パターン（`is_tenant_member`/`has_tenant_role`、または
 `integration_connections`/`oauth_states`のような「本人のみ」パターン）を踏襲。
 `background_jobs`のみRLS有効・ポリシー0件（service-role専用）。
+
+---
+
+## Growth Loop: Measurement / Reporting / Renewal / Upsell (Phase 7) — `20260924000000_growth_loop_phase7.sql`
+
+「案件を受注して実行するAI会社」から「成果を測定し、改善し、継続売上と追加受注を
+自ら生み出すAI会社」への拡張。Phase3-5同様、**テーブル分割の抑制**を継続しつつ、
+Critic/Approval/Conversion/不変性のライフサイクルが必要な箇所だけ新規テーブルにする。
+
+### Delivery確定の分離（既存`projects.status`の拡張）
+
+`projects.status`に`ready_for_delivery`を追加（`active` / `ready_for_delivery` /
+`completed` / `delivered`）。内部承認完了（既存の`delivery`承認タイプ）は
+`ready_for_delivery`までしか進めず、実際の`delivered`遷移は新設
+`delivery_records`テーブル＋明示的なHuman Action
+（`POST /api/projects/[id]/delivery/confirm`）でのみ発生する。
+
+### 新規テーブル
+
+`delivery_records`（納品記録: 誰が/いつ/どのチャネル/どのDeliverable群/
+snapshot_hash）/ `measurement_plans`（KPIごとのBaseline〜評価ライフサイクル:
+`PLANNED→WAITING→READY_TO_EVALUATE→COMPLETED/INSUFFICIENT_DATA/FAILED`）/
+`kpi_snapshots`（`BASELINE`/`CURRENT`/`TARGET`/`MONTH_END`/`CUSTOM`、
+`data_quality`列で断定禁止を担保）/ `anomaly_events`（閾値ベースの異常検知、
+ML不使用）/ `reporting_cycles`（`project_id + period_start`一意、月次サイクルの
+重複生成を防止）/ `monthly_reports`（`content_json`/`snapshot_hash` +
+`APPROVED`/`CLIENT_PREVIEW`/`DELIVERED`到達後の内容変更を拒否するトリガー —
+Phase5の`proposals`/`estimates`と全く同じ不変性パターン）/ `contract_renewals`
+（`contract_id + current_end_date`一意、Renewal Due判定＋Health Score）/
+`upsell_opportunities`（Upsell候補のDetected〜Approved〜Converted、
+Cooldown管理）。
+
+### 既存テーブルへの追加列
+
+`contracts`: `start_date` / `end_date` / `auto_renew` / `notice_period_days`
+（Renewal AgentがContractから直接参照）。
+`kpis`: `definition` / `formula` / `source`（manual/ga4/gsc/ads/semrush/
+clarity/gbp/csv/internal） / `direction`（HIGHER_IS_BETTER等） /
+`warning_threshold` / `critical_threshold` / `measurement_frequency` /
+`initiative_type`（Measurement Trigger遅延日数の決定に使用）。
+`generated_files.entity_type`に`monthly_report`を追加（Phase5のPDF生成
+パイプラインをそのまま再利用）。
+
+### Upsell Opportunity Conversion（新規テーブルを増やさない設計判断）
+
+承認されたUpsell Opportunityは、新しい`opportunities`テーブルを作らず**既存の
+Sales Opportunityパイプラインへ変換**する（`lib/server/approvals.ts`）。
+`opportunities.lead_id`が`NOT NULL`のため、コールドアウトリーチ由来ではない
+「既存クライアントの追加提案」を表す軽量な`leads`行
+（`source='upsell_expansion'`, `status='won'`）を1件作成してFKを満たし、
+`opportunities`は`stage='QUALIFIED'`（コールドアウトリーチ段階をスキップ）で
+開始する。Renewal提案・Upsell提案とも、別のProposal/Estimateシステムは作らず
+既存のProposal Engineを再利用する設計（第七指示 §137）。
+
+### Approval Policies / Agentロースター追加
+
+`monthly_report` / `upsell_opportunity`（いずれも`[{role:manager},{role:ceo}]`）
+を`handle_new_tenant_for_user()`に追加し、既存テナントにも同一migration内で
+バックフィル。Agentロースターに`renewal`（Renewal Agent）/ `upsell`
+（Upsell Agent）を追加（既存の`mina`=Measurement/Analytics、`repo`=Report、
+`kuro`=Critic、`qa`=QAは全て流用）。
+
+### RLS
+
+新規8テーブルすべて`is_tenant_member`/`has_tenant_role`パターン（各4ポリシー）
+を踏襲。
+
+### 実機検証済みの内容（ローカルPostgres 16）
+
+- 8migration（init_schema〜Phase7）全体を順番に適用してエラーが出ないこと。
+- `projects_status_check`が`ready_for_delivery`を受理し、無関係な値
+  （`bogus_status`）を拒否すること。
+- `monthly_reports`の不変性トリガー: `status`が`APPROVED`の行への
+  `content_json`の`UPDATE`が例外で拒否され、`status`のみの更新
+  （`APPROVED`→`DELIVERED`）は成功すること。
+- 新規8テーブル全てで`relrowsecurity = true`かつポリシー4件ずつ存在すること。
+- 2つの独立したテナントがそれぞれ`renewal`/`upsell`エージェントと
+  `monthly_report`/`upsell_opportunity`承認ポリシーを自動取得すること
+  （tenant-provisioningトリガーのバックフィル・新規両方）。
+
+### 既知の制約
+
+GA4/GSC/Ads/Semrush/Clarity/GBPの実コネクタ、Measurement/Report/Renewal/
+Upsell Center・Executive Dashboard・Account Roomの専用画面、MRR/ARR/NRR/GRR・
+Client Profitability（コスト/課金システムが未実装のため）は本フェーズ対象外。
+詳細は`README.md`の「Growth Loop」節を参照。

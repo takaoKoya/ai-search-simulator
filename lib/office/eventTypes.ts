@@ -1,4 +1,4 @@
-export type EventCategory = "sales" | "ops" | "approval" | "contract" | "delivery";
+export type EventCategory = "sales" | "ops" | "approval" | "contract" | "delivery" | "growth";
 export type EventSeverity = "info" | "warning" | "error";
 
 export const FILTER_TABS = [
@@ -8,6 +8,7 @@ export const FILTER_TABS = [
   { key: "approval", label: "承認" },
   { key: "contract", label: "契約" },
   { key: "delivery", label: "納品" },
+  { key: "growth", label: "成果/継続" },
   { key: "warning", label: "Warning" },
   { key: "error", label: "Error" },
 ] as const;
@@ -93,8 +94,24 @@ const EVENT_TYPE_META: Record<string, EventTypeMeta> = {
   "delivery.approval_requested": { label: "納品承認依頼", category: "delivery", severity: "info", icon: "?" },
   "delivery.approved": { label: "納品承認", category: "delivery", severity: "info", icon: "✓" },
   "delivery.completed": { label: "納品完了", category: "delivery", severity: "info", icon: "★" },
+  "delivery.ready": { label: "納品準備完了(READY_FOR_DELIVERY)", category: "delivery", severity: "info", icon: "✓" },
+  "delivery.confirmed": { label: "納品完了(DELIVERED)", category: "delivery", severity: "info", icon: "★" },
 
-  "report.created": { label: "レポート作成", category: "ops", severity: "info", icon: "📈" },
+  "generated_file.created": { label: "書類生成", category: "ops", severity: "info", icon: "📄" },
+
+  "measurement.plan_created": { label: "Measurement Plan作成", category: "growth", severity: "info", icon: "🧪" },
+  "measurement.evaluated": { label: "効果測定", category: "growth", severity: "info", icon: "📊" },
+  "anomaly.detected": { label: "異常検知", category: "growth", severity: "warning", icon: "⚠" },
+  "anomaly.critical_alert": { label: "Critical異常アラート", category: "growth", severity: "error", icon: "🚨" },
+  "kpi.manual_input": { label: "KPI手動入力", category: "growth", severity: "info", icon: "✍" },
+  "report.created": { label: "レポート作成", category: "growth", severity: "info", icon: "📈" },
+  "report.delivered": { label: "レポート納品", category: "growth", severity: "info", icon: "📬" },
+  "renewal.upcoming": { label: "更新時期接近", category: "growth", severity: "warning", icon: "⏳" },
+  "renewal.at_risk": { label: "更新リスク", category: "growth", severity: "warning", icon: "🔻" },
+  "upsell.detected": { label: "アップセル候補検出", category: "growth", severity: "info", icon: "💡" },
+  "upsell.skipped": { label: "アップセル候補スキップ", category: "growth", severity: "info", icon: "⏭" },
+  "upsell.critic_rejected": { label: "アップセルCritic却下", category: "growth", severity: "info", icon: "🛑" },
+  "upsell.converted": { label: "アップセル→商談化", category: "growth", severity: "info", icon: "🔁" },
   "initiative.created": { label: "継続提案作成", category: "ops", severity: "info", icon: "＋" },
 };
 
@@ -109,6 +126,8 @@ const APPROVAL_PAYLOAD_TYPE_TO_CATEGORY: Record<string, EventCategory> = {
   deal_won: "sales",
   contract_approval: "contract",
   delivery: "delivery",
+  monthly_report: "growth",
+  upsell_opportunity: "growth",
 };
 
 export interface EventLike {

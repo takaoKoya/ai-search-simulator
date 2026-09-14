@@ -12,6 +12,7 @@ export const PROJECT_LIFECYCLE = [
   "execution",
   "review",
   "ceo_approval",
+  "ready_for_delivery",
   "delivered",
   "measurement",
 ] as const;
@@ -35,6 +36,19 @@ export async function getProjectRoomState(ctx: TenantContext, projectId: string)
     .maybeSingle();
   if (projectError) throw projectError;
   if (!project) throw new NotFoundError("Project not found");
+
+  const [measurementPlansRes, monthlyReportsRes, contractRenewalsRes, deliveryRecordsRes, upsellOpportunitiesRes] = await Promise.all([
+    supabase.from("measurement_plans").select("id, kpi_id, status, start_at, latest_evaluation").eq("project_id", projectId).eq("tenant_id", tenantId),
+    supabase.from("monthly_reports").select("id, version, period_start, period_end, status, created_at").eq("project_id", projectId).eq("tenant_id", tenantId).order("created_at", { ascending: false }).limit(6),
+    supabase.from("contract_renewals").select("id, current_end_date, status, risk_level, risk_factors, notice_deadline").eq("project_id", projectId).eq("tenant_id", tenantId).order("current_end_date", { ascending: false }).limit(1),
+    supabase.from("delivery_records").select("id, delivered_at, delivery_channel, recipient").eq("project_id", projectId).eq("tenant_id", tenantId).order("delivered_at", { ascending: false }).limit(1),
+    project.client_id
+      ? supabase.from("upsell_opportunities").select("id, recommended_service, problem, status, estimated_value, created_at").eq("client_id", project.client_id).eq("tenant_id", tenantId).order("created_at", { ascending: false }).limit(5)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  for (const res of [measurementPlansRes, monthlyReportsRes, contractRenewalsRes, deliveryRecordsRes, upsellOpportunitiesRes]) {
+    if (res.error) throw res.error;
+  }
 
   const [clientRes, contractRes, teamRes, tasksRes, goalsRes, kpisRes, findingsRes, approvalsRes, deliverablesRes, workflowRunsRes] =
     await Promise.all([
@@ -166,6 +180,13 @@ export async function getProjectRoomState(ctx: TenantContext, projectId: string)
     events,
     progress: { doneTasks, totalTasks: tasks.length, blockedTasks },
     deliveryGate: { executionComplete, criticPassed, qaPassed, ceoApproved },
+    growth: {
+      measurementPlans: measurementPlansRes.data ?? [],
+      monthlyReports: monthlyReportsRes.data ?? [],
+      renewal: (contractRenewalsRes.data ?? [])[0] ?? null,
+      deliveryRecord: (deliveryRecordsRes.data ?? [])[0] ?? null,
+      upsellOpportunities: upsellOpportunitiesRes.data ?? [],
+    },
   };
 }
 
@@ -176,6 +197,7 @@ function deriveLifecycleStage(
   deliveryApproval: { status: string } | undefined
 ): ProjectLifecycleStage {
   if (projectStatus === "delivered") return "delivered";
+  if (projectStatus === "ready_for_delivery") return "ready_for_delivery";
   if (deliveryApproval?.status === "pending") return "review";
   const hasDoneTask = approvals.some((a) => a.type === "delivery");
   if (hasDoneTask) return "review";
