@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { LOGIN_ROUTE } from "@/lib/routes";
 import type { OfficeState } from "@/lib/server/officeState";
 import type { TenantRole } from "@/lib/server/tenant";
+import IntegrationsPanel from "@/components/office/IntegrationsPanel";
 
 export interface QuickSearchHit {
   kind: "lead" | "project" | "agent" | "approval";
@@ -44,6 +45,7 @@ export default function Header({
   const [searchOpen, setSearchOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [integrationsOpen, setIntegrationsOpen] = useState(false);
 
   useEffect(() => {
     const initial = setTimeout(() => setNow(new Date()), 0);
@@ -219,6 +221,16 @@ export default function Header({
                 Role: {role}
               </p>
               <button
+                onClick={() => {
+                  setUserMenuOpen(false);
+                  setIntegrationsOpen(true);
+                }}
+                className="mt-1 block w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-white/5"
+                style={{ color: "var(--office-text-primary)" }}
+              >
+                連携設定（Google）
+              </button>
+              <button
                 onClick={handleSignOut}
                 className="mt-1 block w-full rounded-md px-2 py-1.5 text-left text-xs hover:bg-white/5"
                 style={{ color: "var(--office-text-primary)" }}
@@ -229,6 +241,8 @@ export default function Header({
           )}
         </div>
       </div>
+
+      {integrationsOpen && <IntegrationsPanel onClose={() => setIntegrationsOpen(false)} />}
     </header>
   );
 }
