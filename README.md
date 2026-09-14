@@ -438,3 +438,180 @@ below).
   is verified via the automated tests above plus a real local Postgres run of the
   migration (schema apply, RLS, FK/unique-constraint behavior, trigger/backfill — see
   `supabase/ER.md`), not a real browser session.
+
+### Production Sales Operations — OAuth, Versioning, Documents, SLA (Phase 5)
+
+Phase 5 raises the sales-to-WON path from "demo" to "production-usable": real Google
+OAuth (Gmail/Calendar) behind the *unchanged* Phase 4 `EmailConnector`/
+`CalendarConnector` interfaces, a Manager Approval Queue, immutable Proposal/Estimate
+versioning with a Reconciliation Engine, real PDF/PPTX generation with File Security,
+Meeting Action Items with Human Confirm + Task conversion, and a Business Calendar / SLA
+/ Follow-up / Scheduler layer. Every Phase 5 item traces back to a Phase 4 "Known
+limitation" line above.
+
+#### Setup
+
+1. Apply the three new migrations in order after Phase 4's:
+   `20260919000000_production_sales_ops_phase5.sql` (integrations, versioning columns,
+   manager role, calendars/SLA/followup/files/jobs tables),
+   `20260921000000_approval_snapshot_invalidation.sql` (adds `APPROVAL_INVALIDATED` to
+   `sales_messages.status`), `20260922000000_file_security_and_delivery.sql` (makes
+   `file_access_logs.performed_by_user_id` nullable for external signed-link downloads).
+2. Optional env vars (all absent-safe — every real feature falls back to its Phase
+   1-4 Simulated/manual behavior when unset): `GOOGLE_OAUTH_CLIENT_ID` /
+   `GOOGLE_OAUTH_CLIENT_SECRET` (real Gmail/Calendar), `TOKEN_ENCRYPTION_KEY` (required
+   once Google OAuth is configured — AES-256-GCM key for tokens at rest),
+   `FILE_SIGNING_SECRET` (required once a share-link is issued — HMAC key for signed
+   file URLs), `SUPABASE_SERVICE_ROLE_KEY` + `CRON_SECRET` (required for `/api/cron/*`
+   and the public signed-file-download route). See `.env.example`.
+3. From the Header's user menu, "連携設定（Google）" opens Integrations settings to
+   connect/disconnect Google.
+
+#### Architecture
+
+- **Real Google OAuth, same interfaces** (spec §5-12): `lib/integrations/oauth.ts`
+  implements the Authorization Code Flow + PKCE against Google's official endpoints
+  only (explicitly never: stored password, cookie theft, session reuse, unofficial
+  APIs, scraping). Minimum-necessary scopes only —
+  `gmail.compose`+`gmail.readonly`+`calendar.events`, each with its rationale
+  documented in code — never `https://mail.google.com/`, mail settings, or Contacts.
+  `oauth_states` holds the PKCE verifier + a single-use `state` server-side;
+  `consumeOAuthState()` verifies it against the same tenant+user+provider that started
+  the flow and marks it consumed, so a callback's `state` is never trusted from the
+  request alone (CSRF defense, spec §6). Tokens are AES-256-GCM-encrypted at rest
+  (`lib/integrations/crypto.ts`) — never logged anywhere, not even on a refresh
+  failure — and `getValidAccessToken()` (`lib/integrations/tokenStore.ts`)
+  auto-refreshes near expiry, transitioning to `needs_reauth` on failure (never an
+  infinite retry loop) with bounded exponential backoff on Google's 429s
+  (`lib/integrations/httpRetry.ts`).
+- **`GoogleGmailConnector`/`GoogleCalendarConnector`** (`lib/integrations/`) implement
+  the *exact same* `EmailConnector`/`CalendarConnector` interfaces Phase 4 defined —
+  never touched. `getEmailConnector()`/`getCalendarConnector()` (still in
+  `lib/sales/`) now take an optional `{supabase, tenantId, userId}` and pick the real
+  connector only when that user has a `connected` Google integration; every other case
+  (no ctx, not configured, not connected) falls back to Simulated exactly as before, so
+  every pre-Phase-5 call site keeps working unless Google is actually wired up.
+  `GoogleCalendarConnector.proposeSlots()` deliberately stays the same synchronous
+  heuristic as Simulated (the interface predates async free/busy and isn't changed
+  here) — the real safety property ("AI never confirms a meeting alone", no
+  double-booking) is still enforced by a live `freeBusy.query` check inside
+  `createEvent()` immediately before inserting.
+- **Manager Approval Queue** (spec §51-53): `memberships.role` gains `manager`.
+  `approval_policies` (tenant-editable, data-driven: `conditions` like
+  `{"amountGte": 300000}` → `steps` like `[{"role":"manager"},{"role":"ceo"}]`) drives
+  `lib/server/approvalPolicy.ts`'s `computeApprovalSteps()`, stored on
+  `approval_requests.steps`/`current_step`. `decideApproval()` authorizes step-by-step
+  when a chain exists (advancing without finalizing until the last step approves) and
+  falls back to the *exact* legacy owner/ceo/admin-only path when `steps` is empty —
+  every approval type from Phases 1-4 is completely unaffected. Only `sales_send` and
+  `proposal_approval` compute real steps this phase; CEO Inbox and Manager Inbox are
+  the same `approval_requests` table and the same `decideApproval()` engine, split only
+  by what the UI shows (spec's "display-only split").
+- **Approval Snapshot Hash + expiration** (spec §45, §63-64):
+  `lib/server/approvalSnapshot.ts`'s `computeSnapshotHash()`/`checkSnapshot()` hash the
+  fields that must not change between approval and execution. `sales_send` approvals
+  now carry a `snapshot_hash` + 72h `expires_at`; the Final Send Gate
+  (`lib/server/salesSendGate.ts`) re-verifies the hash, expiry, and a fresh Do Not
+  Contact check immediately before sending, marking the message
+  `APPROVAL_INVALIDATED` and refusing to send on any mismatch — re-approval is
+  required, never "send anyway."
+- **Immutable Proposal/Estimate versioning + Reconciliation Engine** (spec §37-39,
+  §46-48): `content_json`/`snapshot_hash` on `proposals`/`estimates` are the Source of
+  Truth for rendering, protected by real Postgres `BEFORE UPDATE` triggers once a
+  version reaches APPROVED/SENT/ACCEPTED (verified against local Postgres: status-only
+  transitions pass, content edits are rejected). `POST /api/proposals/[id]/new-version`
+  and `.../estimates/[id]/new-version` are the only way to change anything past that
+  point — a new version row, `previous_version_id` set, status reset to DRAFT, a
+  required `change_summary`. `lib/sales/reconciliation.ts`'s
+  `reconcileProposalAndEstimate()` compares a proposal's `scope` against what its
+  estimate actually prices (via the same `matchCatalogItem` heuristic the estimate
+  generation step used) → MATCH/WARNING/BLOCKING_MISMATCH, surfaced on the approval and
+  re-checked at `POST /api/proposals/[id]/send` — even an already-approved proposal is
+  refused delivery on BLOCKING_MISMATCH.
+- **Meeting Action Items** (spec §21-26): a real `meeting_action_items` table (not
+  jsonb on `meetings` — this phase's Human Confirm/duplicate-detection/Task
+  traceability genuinely need first-class rows). Candidates are extracted from a
+  transcript by the same deterministic keyword-cue discipline as
+  `TemplateProvider`'s other regex extractions (`lib/sales/meetingActionItems.ts`) —
+  owner/due date always stay `null` until a human sets them at Confirm time, never
+  guessed. Each candidate is checked against the Opportunity's existing non-rejected
+  items and flagged `possible_duplicate_of` on a match — surfaced to a human, never
+  auto-merged/deleted. "Convert to Project Task" only becomes possible once a real
+  Project exists (WON → Contract → Onboarding, same `tasks.project_id NOT NULL`
+  constraint noted in Phase 4's limitations) — before that, items simply stay
+  Opportunity-level.
+- **Real PDF/PPTX generation + Delivery Package + File Security** (spec §34-49):
+  `lib/documents/proposalPdf.ts` (pdfkit) and `proposalPptx.ts` (pptxgenjs) render
+  purely from a proposal/estimate's `content_json` — never live DB fields that could
+  move on after a version is approved, so a rendered file never silently changes
+  later. `generated_files` (bytes stored directly in Postgres `bytea` — no object
+  storage exists in this sandbox, see limitations) classifies INTERNAL vs
+  CLIENT_VISIBLE from the proposal's own status: only APPROVED/SENT/ACCEPTED is ever
+  shareable. `delivery_packages` bundle a proposal + estimate + their CLIENT_VISIBLE
+  files; sending re-checks every attachment is still CLIENT_VISIBLE. Sharing uses
+  short-lived (5-30 min clamped), HMAC-signed URLs
+  (`lib/server/fileSecurity.ts`) — never a permanent public link — redeemed through
+  the one public route in this codebase (`/api/files/download`) via the service-role
+  client (the external recipient has no Supabase Auth session at all; the signature is
+  the security boundary). Every download/share is logged to `file_access_logs`,
+  including external redemptions (`performed_by_user_id = null`, since there is no
+  human tenant user to attribute those to — the access itself is still audited).
+- **Business Calendar / SLA / Follow-up / Scheduler** (spec §58-73):
+  `lib/server/businessCalendar.ts` does real wall-clock math via `Intl.DateTimeFormat`
+  in a tenant's own IANA timezone (default Asia/Tokyo, Mon-Fri) — never a naive
+  24-hour diff — skipping weekends/holidays for `business_hours`/`business_days`
+  targets (plain `hours`/`days` stay naive on purpose, per spec's own unit
+  distinction). `lib/server/slaEngine.ts` fixes `sla_due_at` at creation time (wired
+  into the high-risk contract approval this phase) and never recomputes it later, only
+  its `sla_status` label. `lib/sales/followupEngine.ts` +
+  `lib/server/followupCheck.ts` create only human-approvable `followup_candidates` —
+  "never auto-send" has no exception anywhere in this code path. Three
+  `/api/cron/*` routes (`sla-check`, `token-refresh`, `followup-check`), each gated by
+  `CRON_SECRET` and using the service-role client, are wrapped by
+  `lib/server/backgroundJob.ts`'s Job Idempotency lock (`background_jobs.job_key`) so
+  an overlapping trigger never runs the same job concurrently.
+
+#### Tests
+
+Every new pure module has unit tests: `businessCalendar.test.ts` (13 cases — business
+day/hour math, weekend/holiday skipping), `slaEngine.test.ts`, `followupEngine.test.ts`
++ `followupCheck.test.ts`, `reconciliation.test.ts`, `approvalSnapshot.test.ts` +
+`salesSendGate.test.ts`, `approvalPolicy.test.ts`, `crypto.test.ts` + `oauth.test.ts` +
+`tokenStore.test.ts` (mocked Google endpoints, never real network),
+`googleGmailConnector.test.ts` + `googleCalendarConnector.test.ts`, `fileSecurity.test.ts`
+(signed-token forgery/expiry), `bytea.test.ts`, `documentGeneration.test.ts` +
+`proposalDocument.test.ts` (real PDF/PPTX byte output — `%PDF-`/`PK` magic bytes),
+`deliveryPackage.test.ts`, `proposalVersioning.test.ts` + `estimateVersioning.test.ts`.
+`lib/langgraph/graphs/phase5VerticalSlice.integration.test.ts` chains the biggest new
+pieces together against the fake in-memory Supabase: a high-value proposal through the
+2-step manager→ceo Approval Queue (reconciliation MATCH surfaced along the way), real
+PDF/PPTX generation once approved, a Delivery Package created and sent, plus separate
+cases for Approval Snapshot Hash invalidation and Business-Time SLA computation. All
+251 tests pass; `npx tsc --noEmit`, `npx eslint .`, and `npm run build` are clean.
+
+#### Known limitations
+
+- **No live Google OAuth credentials exist in this sandbox** — the OAuth
+  flow/connectors are real, tested code (mocked Google endpoints in unit tests), but
+  never exercised against the actual Google API end-to-end. This is the same
+  fundamental sandbox constraint noted for every prior phase's "no live Supabase
+  project" limitation, just for a second external provider.
+- `GoogleCalendarConnector.proposeSlots()` stays a heuristic, not a live free/busy
+  query (see Architecture above) — the interface predates async and isn't changed
+  here; the actual double-booking safety net is `createEvent()`'s live check.
+- No object storage (S3/GCS) exists in this sandbox — generated files live in a
+  Postgres `bytea` column. `storage_path` is kept as the logical name a real
+  deployment would use once real object storage is wired in.
+- Reply Sync, a live Calendar-sync job, and a live Gmail-thread-check job are
+  designed for (the connectors and job-idempotency infrastructure exist) but not
+  wired into a `/api/cron/*` route this phase — only `sla-check`/`token-refresh`/
+  `followup-check` are. Real thread-scoped Gmail polling has no Gmail data to poll in
+  this sandbox regardless.
+- Outlook/Microsoft Calendar, Slack/Teams/Chatwork, e-contract APIs, billing/Stripe/
+  freee/MoneyForward integration, and fully-automatic send/reply remain explicitly
+  out of scope (per the product brief itself) — the Connector interface extension
+  points are preserved for them.
+- As with Phases 1-4, no live Supabase project was available in this sandbox — Phase 5
+  is verified via the automated tests above plus real local Postgres runs of all three
+  new migrations (schema apply, new-status-value acceptance,
+  nullable-column-with-FK-intact — see `supabase/ER.md`), not a real browser session.

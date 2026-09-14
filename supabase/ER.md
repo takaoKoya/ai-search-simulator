@@ -209,3 +209,59 @@ Final Send Gate（APIルート）はSENTへの状態遷移を`update ... where s
 
 新規7テーブルすべて`is_tenant_member`/`has_tenant_role`パターンを踏襲。RLS有効化・
 ポリシー数(各4件)をローカルPostgresで確認済み。
+
+---
+
+## Production Sales Operations (Phase 5) — 3 migrations
+
+`20260919000000_production_sales_ops_phase5.sql` / `20260921000000_approval_snapshot_invalidation.sql` /
+`20260922000000_file_security_and_delivery.sql`。Phase3-4同様、**テーブル分割の抑制**を継続しつつ、
+「Human Confirm/重複検知/Task追跡性」など第一級の行が本当に必要な箇所だけ新規テーブルにしている。
+
+### 意図的に新規テーブルを作らなかったもの
+
+- Proposal/Estimateの「不変バージョン管理」は、既存の`proposals`/`estimates`
+  （Phase4から既に1行=1バージョンで`version`/`previous_version_id`を持つ）に
+  `content_json`/`snapshot_hash`/`change_summary`を追加し、`APPROVED`/`SENT`/`ACCEPTED`
+  到達後の内容変更をトリガーで拒否する形で実現。`proposal_versions`/`estimate_versions`
+  という履歴テーブルは作らない。
+- Manager Approval Queue（Manager/CEOの承認チェーン）は既存`approval_requests`に
+  `steps` jsonb配列 + `current_step`を追加するのみ。`approval_steps`という別テーブルは
+  作らない — 1つの承認リクエストの生涯は既存の1行で表現できる。
+- Approval Snapshot Hash / SLA も同様に`approval_requests`への列追加
+  (`snapshot_hash`/`expires_at`/`sla_due_at`/`sla_status`/`policy_code`)のみ。
+
+### 新規テーブル（本当に別エンティティのため）
+
+`integration_connections` / `oauth_states`（Google OAuth。トークンは暗号化文字列のみ保持し、
+生のトークンを直接持つ列は存在しない）/ `meeting_action_items`（Phase4は`meetings.minutes.actionItems`
+のjsonbのみだったが、本フェーズのHuman Confirm状態遷移・重複検知・Task追跡には第一級の行が必要）/
+`generated_files`（`file_data bytea` — このサンドボックスには外部オブジェクトストレージが存在しないため
+Postgres列に直接バイト列を保存。`storage_path`は将来S3/GCS移行時に使う論理名として保持）/
+`delivery_packages` / `file_access_logs`（ダウンロード/共有リンク発行の監査ログ。外部の署名付きリンク
+経由のダウンロードは`performed_by_user_id`が`null`になる唯一のケース — 人間のテナントユーザーが
+存在しないため。2本目のmigrationで`not null`制約を外した）/ `approval_policies`（データ駆動の承認
+ポリシー: `conditions` jsonb + `steps` jsonb）/ `business_calendars` / `business_calendar_holidays` /
+`sla_policies` / `followup_candidates`（人間が確認するまで絶対に送信しないFollow-up候補）/
+`background_jobs`（RLS有効・ポリシー0件 = service-roleクライアント専用。`/api/cron/*`と
+`/api/files/download`の2箇所のみがservice-roleを使う、明示的かつ限定的な例外）。
+
+### `memberships`への変更
+
+`role`のcheck制約に`'manager'`を追加（`owner`/`ceo`/`admin`/`manager`/`member`）。
+
+### 実機検証済みの内容（ローカルPostgres 16）
+
+- 6migration全体を順番に適用してエラーが出ないこと。
+- `proposals`/`estimates`の不変性トリガー: `status`が`APPROVED`/`SENT`/`ACCEPTED`の行への
+  内容列の`UPDATE`が例外で拒否され、`status`のみの更新は成功すること。
+- `sales_messages.status`に新しい値`APPROVAL_INVALIDATED`が受理され、無関係な不正値は
+  引き続き拒否されること。
+- `file_access_logs.performed_by_user_id`に`null`を挿入できること（外部署名リンクの
+  ダウンロード記録を模擬）。
+
+### RLS
+
+新規テーブルすべて既存パターン（`is_tenant_member`/`has_tenant_role`、または
+`integration_connections`/`oauth_states`のような「本人のみ」パターン）を踏襲。
+`background_jobs`のみRLS有効・ポリシー0件（service-role専用）。
