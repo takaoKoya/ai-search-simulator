@@ -3,11 +3,13 @@ import type { SupabaseCheckpointSaver } from "@/lib/langgraph/checkpointer";
 import { createApprovalRequest, emitEvent, getAgentByCapability, runAgentStep, type GraphRunCtx } from "@/lib/langgraph/context";
 import { lastValue, type GraphStatus } from "@/lib/langgraph/state";
 import { getProviderForAgent } from "@/lib/ai/provider";
-import { buildEstimate, evaluateDiscountGuard, matchCatalogItem, type CatalogItem } from "@/lib/sales/pricing";
+import { buildEstimate, evaluateDiscountGuard, matchCatalogItem, type CatalogItem, type EstimateLineItem } from "@/lib/sales/pricing";
 import { checkProposalDraft } from "@/lib/sales/proposalCritic";
 import { decideCriticVerdict } from "@/lib/sales/criticGate";
 import { addOpportunityCost } from "@/lib/sales/cost";
 import { computeApprovalSteps, loadApprovalPolicies } from "@/lib/server/approvalPolicy";
+import { computeSnapshotHash } from "@/lib/server/approvalSnapshot";
+import { reconcileProposalAndEstimate } from "@/lib/sales/reconciliation";
 
 interface ProposalData {
   title: string;
@@ -117,6 +119,13 @@ export function buildProposalDraftGraph(ctx: GraphRunCtx, checkpointer: Supabase
       await addOpportunityCost(ctx, state.opportunityId, "proposal_draft");
 
       const proposalAgent = await getAgentByCapability(ctx, "proposal_draft", "proposal");
+      // content_json is the Source of Truth for later PDF/PPTX rendering
+      // (spec §37-38): it is exactly what a human sees at approval time, and
+      // once this row reaches APPROVED/SENT/ACCEPTED the DB immutability
+      // trigger blocks any further edit to it or the individual columns
+      // above — a later change always requires a new version row instead
+      // (see lib/server/proposalVersioning.ts).
+      const contentJson = { ...proposal };
       const { data: proposalRow, error } = await ctx.supabase
         .from("proposals")
         .insert({
@@ -138,6 +147,8 @@ export function buildProposalDraftGraph(ctx: GraphRunCtx, checkpointer: Supabase
           risks: proposal.risks,
           next_step: proposal.nextStep,
           created_by_agent_id: proposalAgent.id,
+          content_json: contentJson,
+          snapshot_hash: computeSnapshotHash(contentJson),
         })
         .select("id")
         .single();
@@ -169,6 +180,17 @@ export function buildProposalDraftGraph(ctx: GraphRunCtx, checkpointer: Supabase
       const result = buildEstimate({ catalogItems: matched });
       await addOpportunityCost(ctx, state.opportunityId, "estimate_draft");
 
+      // Same Source-of-Truth reasoning as the proposal's content_json above.
+      const estimateContentJson = {
+        lineItems: result.lineItems,
+        subtotal: result.subtotal,
+        discount: result.discount,
+        tax: result.tax,
+        total: result.total,
+        setupFee: result.setupFee,
+        monthlyFee: result.monthlyFee,
+        annualValue: result.annualValue,
+      };
       const { data: estimateRow, error } = await ctx.supabase
         .from("estimates")
         .insert({
@@ -187,6 +209,8 @@ export function buildProposalDraftGraph(ctx: GraphRunCtx, checkpointer: Supabase
           annual_value: result.annualValue,
           payment_terms: "月末締め翌月末払い",
           created_by_agent_id: estimateAgent.id,
+          content_json: estimateContentJson,
+          snapshot_hash: computeSnapshotHash(estimateContentJson),
         })
         .select("id")
         .single();
@@ -231,10 +255,29 @@ export function buildProposalDraftGraph(ctx: GraphRunCtx, checkpointer: Supabase
       return { criticStatus: decision.verdict, criticShouldRetry: decision.shouldRetry, revisionCount: decision.nextRevisionCount, currentNode: "critic_review" };
     })
     .addNode("request_proposal_approval", async (state) => {
-      const { data: estimate } = await ctx.supabase.from("estimates").select("total, discount, subtotal").eq("id", state.estimateId).eq("tenant_id", ctx.tenantId).maybeSingle();
+      const { data: estimate } = await ctx.supabase.from("estimates").select("total, discount, subtotal, line_items").eq("id", state.estimateId).eq("tenant_id", ctx.tenantId).maybeSingle();
       const discountRate = estimate && (estimate.subtotal as number) > 0 ? (estimate.discount as number) / (estimate.subtotal as number) : 0;
       const discountGuard = evaluateDiscountGuard(discountRate);
-      const highRisk = state.criticStatus !== "PASS" || discountGuard.tier === "ceo_with_reason";
+
+      // Reconciliation Engine (spec §46-48): compares the proposal's scope
+      // against what the estimate actually prices, right at the moment a
+      // human is asked to approve — never a silent gap between what the
+      // client is told and what they're billed.
+      const { data: catalogRows } = await ctx.supabase.from("service_catalog").select("code, name, standard_price, setup_fee, pricing_model").eq("tenant_id", ctx.tenantId).eq("is_active", true);
+      const catalog: CatalogItem[] = (catalogRows ?? []).map((c) => ({
+        code: c.code as string,
+        name: c.name as string,
+        standardPrice: c.standard_price as number,
+        setupFee: c.setup_fee as number,
+        pricingModel: c.pricing_model as CatalogItem["pricingModel"],
+      }));
+      const reconciliation = reconcileProposalAndEstimate({
+        proposalScope: state.proposalData!.scope,
+        estimateLineItems: (estimate?.line_items as EstimateLineItem[] | undefined) ?? [],
+        catalog,
+      });
+
+      const highRisk = state.criticStatus !== "PASS" || discountGuard.tier === "ceo_with_reason" || reconciliation.status !== "MATCH";
 
       const description = [
         `会社名: ${state.companyName}`,
@@ -242,6 +285,7 @@ export function buildProposalDraftGraph(ctx: GraphRunCtx, checkpointer: Supabase
         `見積合計: ¥${(estimate?.total as number | undefined)?.toLocaleString() ?? "-"}`,
         `Discount Guard: ${discountGuard.tier}${discountGuard.reasonRequired ? "（理由必須）" : ""}`,
         state.unmatchedServices.length > 0 ? `価格未確定サービス: ${state.unmatchedServices.join(", ")}` : "",
+        `Reconciliation: ${reconciliation.status}${reconciliation.issues.length > 0 ? `\n  ${reconciliation.issues.join("\n  ")}` : ""}`,
       ]
         .filter(Boolean)
         .join("\n");
@@ -264,7 +308,12 @@ export function buildProposalDraftGraph(ctx: GraphRunCtx, checkpointer: Supabase
         title: `${state.companyName} への提案・見積承認`,
         description,
         riskLevel: highRisk ? "HIGH" : "MEDIUM",
-        aiRecommendation: state.criticStatus === "PASS" ? "Criticレビュー済み。内容・価格の確認をお願いします。" : "Criticで指摘事項が残っています。",
+        aiRecommendation:
+          reconciliation.status === "BLOCKING_MISMATCH"
+            ? "Reconciliation: BLOCKING_MISMATCH — 提案内容と見積が一致していません。承認前に内容を確認してください（承認されても、この不一致が解消するまで納品はブロックされます）。"
+            : state.criticStatus === "PASS"
+              ? "Criticレビュー済み。内容・価格の確認をお願いします。"
+              : "Criticで指摘事項が残っています。",
         requestedByAgentCode: "proposal",
         steps,
         policyCode: policyCodes.join(",") || null,
