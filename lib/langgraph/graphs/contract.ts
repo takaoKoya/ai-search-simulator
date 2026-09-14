@@ -3,6 +3,7 @@ import type { SupabaseCheckpointSaver } from "@/lib/langgraph/checkpointer";
 import { createApprovalRequest, emitEvent, runAgentStep, type GraphRunCtx } from "@/lib/langgraph/context";
 import { lastValue, type GraphStatus } from "@/lib/langgraph/state";
 import { getProviderForAgent } from "@/lib/ai/provider";
+import { computeSlaForEvent } from "@/lib/server/slaEngine";
 
 const ContractState = Annotation.Root({
   opportunityId: lastValue<string>(),
@@ -64,6 +65,13 @@ export function buildContractGraph(ctx: GraphRunCtx, checkpointer: SupabaseCheck
     })
     .addNode("request_approval", async (state) => {
       const highRisk = state.riskLevel === "HIGH" || state.riskLevel === "CRITICAL";
+
+      // Business-Time-aware SLA (spec §61-64): only a high-risk contract
+      // review has a matching sla_policies row (entity_type=
+      // 'approval_request', event_type='contract_high_risk') — a LOW/MEDIUM
+      // risk contract gets no SLA due date, never a fabricated one.
+      const sla = highRisk ? await computeSlaForEvent(ctx, { entityType: "approval_request", eventType: "contract_high_risk", startAt: new Date() }) : null;
+
       const approvalId = await createApprovalRequest(ctx, {
         type: "contract_approval",
         subjectType: "contract",
@@ -72,6 +80,7 @@ export function buildContractGraph(ctx: GraphRunCtx, checkpointer: SupabaseCheck
         riskLevel: state.riskLevel,
         aiRecommendation: highRisk ? "リスクが高いため慎重な確認を推奨します。" : "リスクは許容範囲内。承認を推奨します。",
         requestedByAgentCode: "contract",
+        slaDueAt: sla?.dueAt.toISOString(),
       });
       return { approvalRequestId: approvalId, status: "waiting_human" as GraphStatus, currentNode: "request_approval" };
     })

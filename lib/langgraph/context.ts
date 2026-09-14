@@ -242,6 +242,14 @@ export async function createApprovalRequest(
      */
     snapshotHash?: string | null;
     expiresAt?: string | null;
+    /**
+     * Business-Time-aware SLA (spec §61-64): fixed at creation time via
+     * lib/server/slaEngine.ts's computeSlaForEvent — never recomputed from
+     * a tenant's current calendar config later. `sla_status` starts
+     * "ON_TRACK" and is updated only by the /api/cron/sla-check job.
+     * Omitted by every call site that has no matching sla_policies row.
+     */
+    slaDueAt?: string | null;
   }
 ): Promise<string> {
   const requestedByAgent = params.requestedByAgentCode ? await getAgentByCode(ctx, params.requestedByAgentCode) : null;
@@ -263,6 +271,7 @@ export async function createApprovalRequest(
       ...(steps.length > 0 ? { steps, current_step: 0, policy_code: params.policyCode ?? null } : {}),
       ...(params.snapshotHash ? { snapshot_hash: params.snapshotHash } : {}),
       ...(params.expiresAt ? { expires_at: params.expiresAt } : {}),
+      ...(params.slaDueAt ? { sla_due_at: params.slaDueAt, sla_status: "ON_TRACK" } : {}),
     })
     .select("id")
     .single();
