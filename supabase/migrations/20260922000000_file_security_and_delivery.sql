@@ -1,0 +1,13 @@
+-- File Security / Delivery Package support (spec §34-49).
+--
+-- file_access_logs.performed_by_user_id becomes nullable: a signed-URL
+-- download by an external client (spec §48's "signed URL, 5-30 min, no
+-- permanent public URL") has no Supabase Auth session at all — there is no
+-- human tenant member to attribute the row to, but the download itself is
+-- exactly the action spec §49 requires auditing ("every important file
+-- action must be audited"). NULL here specifically means "an external
+-- recipient via a signed link", never "we forgot to record who." The
+-- read/write path for this table is exclusively the service-role client
+-- (see lib/supabase/serviceRole.ts) for signed-link redemption, plus the
+-- normal tenant-member path for authenticated in-app downloads/shares.
+alter table public.file_access_logs alter column performed_by_user_id drop not null;
