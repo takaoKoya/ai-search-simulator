@@ -1,4 +1,4 @@
-import { APPROVER_ROLES, assertRole, getTenantContext } from "@/lib/server/tenant";
+import { DECISION_CAPABLE_ROLES, assertRole, getTenantContext } from "@/lib/server/tenant";
 import { withRoute } from "@/lib/server/withRoute";
 import { ValidationError } from "@/lib/server/errors";
 import { decideApproval, type ApprovalAction } from "@/lib/server/approvals";
@@ -9,7 +9,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   return withRoute(async () => {
     const { id } = await params;
     const ctx = await getTenantContext();
-    assertRole(ctx, APPROVER_ROLES);
+    assertRole(ctx, DECISION_CAPABLE_ROLES);
 
     const body = await request.json().catch(() => ({}));
     const action = body.action as ApprovalAction;

@@ -1,4 +1,5 @@
 import type { SupabaseServerClient } from "@/lib/server/tenant";
+import type { ApprovalStep } from "@/lib/server/approvalPolicy";
 
 export interface AgentRow {
   id: string;
@@ -221,9 +222,20 @@ export async function createApprovalRequest(
     riskLevel?: string;
     aiRecommendation?: string;
     requestedByAgentCode?: string;
+    /**
+     * Manager Approval Queue routing (spec §51-53): an ordered chain of
+     * `{role}` steps computed by lib/server/approvalPolicy.ts. Omitted or
+     * empty means "no policy routing configured for this call site" — the
+     * approval stays on the legacy owner/ceo/admin-decides-directly path
+     * (see decideApproval's empty-steps fallback), so every pre-Phase-5 call
+     * site keeps working unchanged without passing this at all.
+     */
+    steps?: ApprovalStep[];
+    policyCode?: string | null;
   }
 ): Promise<string> {
   const requestedByAgent = params.requestedByAgentCode ? await getAgentByCode(ctx, params.requestedByAgentCode) : null;
+  const steps = params.steps ?? [];
 
   const { data, error } = await ctx.supabase
     .from("approval_requests")
@@ -238,6 +250,7 @@ export async function createApprovalRequest(
       ai_recommendation: params.aiRecommendation ?? null,
       requested_by_agent_id: requestedByAgent?.id ?? null,
       status: "pending",
+      ...(steps.length > 0 ? { steps, current_step: 0, policy_code: params.policyCode ?? null } : {}),
     })
     .select("id")
     .single();

@@ -7,6 +7,7 @@ import { recommendChannel, type ChannelRecommendation } from "@/lib/sales/channe
 import { checkOutreachDraft } from "@/lib/sales/outreachCritic";
 import { decideCriticVerdict } from "@/lib/sales/criticGate";
 import { addLeadCost } from "@/lib/sales/cost";
+import { computeApprovalSteps, loadApprovalPolicies } from "@/lib/server/approvalPolicy";
 
 interface DraftData {
   subject: string;
@@ -263,6 +264,13 @@ export function buildSalesOutreachPrepGraph(ctx: GraphRunCtx, checkpointer: Supa
         draft.body,
       ].join("\n");
 
+      // Manager Approval Queue (spec §51-53): a tenant with no
+      // approval_policies seeded (or none matching) yields empty steps,
+      // which decideApproval treats as the legacy CEO-only path — this
+      // never blocks the approval from being creatable.
+      const policies = await loadApprovalPolicies(ctx.supabase, ctx.tenantId);
+      const { steps, policyCodes } = computeApprovalSteps(policies, [{ codePrefix: "sales_send", context: {} }]);
+
       const approvalId = await createApprovalRequest(ctx, {
         type: "sales_send",
         subjectType: "sales_message",
@@ -272,6 +280,8 @@ export function buildSalesOutreachPrepGraph(ctx: GraphRunCtx, checkpointer: Supa
         riskLevel: highRisk ? "MEDIUM" : "LOW",
         aiRecommendation: highRisk ? "Criticで指摘事項が残っています。内容の確認を推奨します。" : "Criticレビュー済み。送信承認を推奨します。",
         requestedByAgentCode: "outreach",
+        steps,
+        policyCode: policyCodes[0] ?? null,
       });
       await ctx.supabase.from("sales_messages").update({ approval_request_id: approvalId }).eq("id", state.messageId).eq("tenant_id", ctx.tenantId);
 

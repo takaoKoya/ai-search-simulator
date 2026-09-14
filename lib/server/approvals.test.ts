@@ -149,4 +149,128 @@ describe("decideApproval", () => {
     const ctx = makeCtx(fake, "t1");
     await expect(decideApproval(ctx, "appr-1", "approve")).rejects.toThrow();
   });
+
+  describe("Manager Approval Queue (step-based authorization)", () => {
+    it("lets a manager approve the step assigned to them, advancing the chain without finalizing", async () => {
+      const fake = new FakeSupabase();
+      const tenantId = "t1";
+      fake.table("approval_requests").push({
+        id: "appr-1",
+        tenant_id: tenantId,
+        type: "proposal_approval",
+        subject_type: "proposal",
+        subject_id: "prop-1",
+        title: "見積承認",
+        status: "pending",
+        steps: [{ role: "manager", status: "PENDING" }, { role: "ceo", status: "PENDING" }],
+        current_step: 0,
+      });
+
+      const managerCtx = makeCtx(fake, tenantId, "user-manager", "manager");
+      const result = await decideApproval(managerCtx, "appr-1", "approve");
+      expect(result.status).toBe("pending");
+
+      const row = fake.table("approval_requests").find((a) => a.id === "appr-1")!;
+      expect(row.status).toBe("pending");
+      expect(row.current_step).toBe(1);
+      const steps = row.steps as Array<{ role: string; status: string }>;
+      expect(steps[0].status).toBe("APPROVED");
+      expect(steps[1].status).toBe("PENDING");
+    });
+
+    it("blocks a manager from deciding a step assigned to a different role", async () => {
+      const fake = new FakeSupabase();
+      const tenantId = "t1";
+      fake.table("approval_requests").push({
+        id: "appr-1",
+        tenant_id: tenantId,
+        type: "proposal_approval",
+        subject_type: "proposal",
+        subject_id: "prop-1",
+        title: "見積承認",
+        status: "pending",
+        steps: [{ role: "ceo", status: "PENDING" }],
+        current_step: 0,
+      });
+
+      const managerCtx = makeCtx(fake, tenantId, "user-manager", "manager");
+      await expect(decideApproval(managerCtx, "appr-1", "approve")).rejects.toThrow();
+    });
+
+    it("blocks a plain member from deciding any step-chained approval", async () => {
+      const fake = new FakeSupabase();
+      const tenantId = "t1";
+      fake.table("approval_requests").push({
+        id: "appr-1",
+        tenant_id: tenantId,
+        type: "sales_send",
+        subject_type: "sales_message",
+        subject_id: "msg-1",
+        title: "送信承認",
+        status: "pending",
+        steps: [{ role: "manager", status: "PENDING" }],
+        current_step: 0,
+      });
+
+      const memberCtx = makeCtx(fake, tenantId, "user-member", "member");
+      await expect(decideApproval(memberCtx, "appr-1", "approve")).rejects.toThrow();
+    });
+
+    it("lets a ceo override a step assigned to manager, advancing the chain like a normal step-approve", async () => {
+      // Superuser override means the role check never blocks owner/ceo/admin
+      // — it does not mean they can skip ahead of a chain that isn't at its
+      // final step yet. A ceo approving step 0 of a 2-step chain still just
+      // advances to step 1 (where, in this vertical slice, ceo would go on
+      // to approve again) rather than finalizing early.
+      const fake = new FakeSupabase();
+      const tenantId = "t1";
+      fake.table("approval_requests").push({
+        id: "appr-1",
+        tenant_id: tenantId,
+        type: "proposal_approval",
+        subject_type: "proposal",
+        subject_id: "prop-1",
+        title: "見積承認",
+        status: "pending",
+        steps: [{ role: "manager", status: "PENDING" }, { role: "ceo", status: "PENDING" }],
+        current_step: 0,
+      });
+
+      const ceoCtx = makeCtx(fake, tenantId, "user-ceo", "ceo");
+      const result = await decideApproval(ceoCtx, "appr-1", "approve");
+      expect(result.status).toBe("pending");
+
+      const row = fake.table("approval_requests").find((a) => a.id === "appr-1")!;
+      expect(row.status).toBe("pending");
+      expect(row.current_step).toBe(1);
+      const steps = row.steps as Array<{ role: string; status: string }>;
+      expect(steps[0].status).toBe("APPROVED");
+      expect(steps[1].status).toBe("PENDING");
+    });
+
+    it("lets the ceo finalize the final step, marking earlier manager steps CANCELLED on reject", async () => {
+      const fake = new FakeSupabase();
+      const tenantId = "t1";
+      fake.table("approval_requests").push({
+        id: "appr-1",
+        tenant_id: tenantId,
+        type: "proposal_approval",
+        subject_type: "proposal",
+        subject_id: "prop-1",
+        title: "見積承認",
+        status: "pending",
+        steps: [{ role: "manager", status: "APPROVED" }, { role: "ceo", status: "PENDING" }],
+        current_step: 1,
+      });
+
+      const ceoCtx = makeCtx(fake, tenantId, "user-ceo", "ceo");
+      const result = await decideApproval(ceoCtx, "appr-1", "reject", "価格見直しが必要");
+      expect(result.status).toBe("rejected");
+
+      const row = fake.table("approval_requests").find((a) => a.id === "appr-1")!;
+      const steps = row.steps as Array<{ role: string; status: string }>;
+      expect(steps[0].status).toBe("APPROVED");
+      expect(steps[1].status).toBe("REJECTED");
+    });
+  });
 });

@@ -1,9 +1,17 @@
 import { runBusinessGraph } from "@/lib/langgraph/orchestrator";
 import { addToDoNotContact } from "@/lib/sales/dnc";
-import { NotFoundError, ValidationError } from "@/lib/server/errors";
+import { ForbiddenError, NotFoundError, ValidationError } from "@/lib/server/errors";
 import type { TenantContext } from "@/lib/server/tenant";
+import type { ApprovalStep } from "@/lib/server/approvalPolicy";
 
 import { getEmailConnector } from "@/lib/sales/emailConnector";
+
+/**
+ * Roles that can decide (or override) any approval regardless of its step
+ * chain — the pre-Phase-5 CEO Inbox semantics, unchanged. A "manager" role
+ * can only decide the specific step assigned to it by `steps`.
+ */
+const SUPERUSER_ROLES: TenantContext["role"][] = ["owner", "ceo", "admin"];
 
 export type ApprovalAction = "approve" | "reject" | "revise" | "hold" | "do_not_contact";
 
@@ -47,6 +55,25 @@ interface ApprovalRow {
   subject_id: string;
   title: string;
   status: string;
+  steps?: ApprovalStep[] | null;
+  current_step?: number | null;
+}
+
+/**
+ * Fine-grained step authorization (spec §51-53). Owner/ceo/admin can always
+ * decide/override any approval at any step — identical to every pre-Phase-5
+ * approval type, which never had a `steps` chain at all (empty steps here
+ * falls back to "superuser only", exactly matching the route-level
+ * `assertRole(ctx, APPROVER_ROLES)` gate that guarded every approval type
+ * before this phase). A non-superuser role (e.g. "manager") may only decide
+ * when it is explicitly named at the chain's current step.
+ */
+function authorizeDecision(ctx: TenantContext, steps: ApprovalStep[], currentStep: number): void {
+  if (SUPERUSER_ROLES.includes(ctx.role)) return;
+  const step = steps[currentStep];
+  if (!step || step.role !== ctx.role) {
+    throw new ForbiddenError(`Role "${ctx.role}" cannot decide this approval${step ? ` (requires "${step.role}")` : ""}`);
+  }
 }
 
 /**
@@ -71,7 +98,7 @@ export async function decideApproval(
 
   const { data: approval, error } = await supabase
     .from("approval_requests")
-    .select("id, tenant_id, type, subject_type, subject_id, title, status")
+    .select("id, tenant_id, type, subject_type, subject_id, title, status, steps, current_step")
     .eq("id", approvalId)
     .eq("tenant_id", tenantId)
     .single();
@@ -84,13 +111,57 @@ export async function decideApproval(
     throw new ValidationError(`"${action}" is not valid for ${approvalRow.type} approvals`);
   }
 
+  const steps = approvalRow.steps ?? [];
+  const currentStep = approvalRow.current_step ?? 0;
+  authorizeDecision(ctx, steps, currentStep);
+
+  if (action === "approve" && editNote && editNote.trim().length > 0) {
+    await supabase.from("decision_memories").insert({
+      tenant_id: tenantId,
+      approval_request_id: approvalId,
+      category: `${approvalRow.type}_edit`,
+      note: editNote.trim(),
+      created_by_user_id: userId,
+    });
+  }
+
+  // Manager Approval Queue (spec §51-53): approving a non-final step in a
+  // multi-step chain advances the chain instead of finalizing the approval —
+  // only approving the LAST step runs applyApproval()'s side effects. A
+  // chain with no steps (every pre-Phase-5 approval type) never enters here.
+  if (action === "approve" && steps.length > 0 && currentStep < steps.length - 1) {
+    const nextStep = currentStep + 1;
+    const advancedSteps = steps.map((s, i) => (i === currentStep ? { ...s, status: "APPROVED", approver_user_id: userId, decided_at: new Date().toISOString() } : s));
+    await supabase.from("approval_requests").update({ steps: advancedSteps, current_step: nextStep }).eq("id", approvalId).eq("tenant_id", tenantId);
+    await supabase.from("agent_events").insert({
+      tenant_id: tenantId,
+      event_type: "approval.step_approved",
+      message: `${approvalRow.title}: ${ctx.role}が承認（次の承認者: ${steps[nextStep]?.role}）`,
+      payload: { approvalRequestId: approvalId, action, type: approvalRow.type, step: currentStep, nextRole: steps[nextStep]?.role },
+    });
+    return { status: "pending" };
+  }
+
   const newStatus = STATUS_BY_ACTION[action];
 
-  const { error: updateError } = await supabase
-    .from("approval_requests")
-    .update({ status: newStatus, decided_by_user_id: userId, decided_at: new Date().toISOString(), decision_reason: reason ?? null })
-    .eq("id", approvalId)
-    .eq("tenant_id", tenantId);
+  const updatePayload: Record<string, unknown> = {
+    status: newStatus,
+    decided_by_user_id: userId,
+    decided_at: new Date().toISOString(),
+    decision_reason: reason ?? null,
+  };
+  if (steps.length > 0) {
+    // Finalize the chain: the deciding step is marked APPROVED/REJECTED
+    // (whichever ended the chain), any earlier step keeps its already-
+    // recorded decision, and any not-yet-reached step is CANCELLED.
+    updatePayload.steps = steps.map((s, i) => {
+      if (i < currentStep) return s;
+      if (i === currentStep) return { ...s, status: action === "approve" ? "APPROVED" : "REJECTED", approver_user_id: userId, decided_at: new Date().toISOString() };
+      return { ...s, status: "CANCELLED" };
+    });
+  }
+
+  const { error: updateError } = await supabase.from("approval_requests").update(updatePayload).eq("id", approvalId).eq("tenant_id", tenantId);
   if (updateError) throw updateError;
 
   await supabase.from("agent_events").insert({
@@ -122,19 +193,9 @@ export async function decideApproval(
     return { status: newStatus };
   }
 
-  // "Edit and Approve": the CEO's edit note is captured as a decision_memory
-  // even though the request is approved as-is (content is not auto-rewritten
-  // from this note yet).
-  if (editNote && editNote.trim().length > 0) {
-    await supabase.from("decision_memories").insert({
-      tenant_id: tenantId,
-      approval_request_id: approvalId,
-      category: `${approvalRow.type}_edit`,
-      note: editNote.trim(),
-      created_by_user_id: userId,
-    });
-  }
-
+  // "Edit and Approve" note (if any) was already recorded above, before the
+  // multi-step early-return check, so it is captured on every approve — not
+  // just a chain's final step.
   const followUp = await applyApproval(ctx, approvalRow);
   return { status: newStatus, followUp };
 }

@@ -7,6 +7,7 @@ import { buildEstimate, evaluateDiscountGuard, matchCatalogItem, type CatalogIte
 import { checkProposalDraft } from "@/lib/sales/proposalCritic";
 import { decideCriticVerdict } from "@/lib/sales/criticGate";
 import { addOpportunityCost } from "@/lib/sales/cost";
+import { computeApprovalSteps, loadApprovalPolicies } from "@/lib/server/approvalPolicy";
 
 interface ProposalData {
   title: string;
@@ -245,6 +246,17 @@ export function buildProposalDraftGraph(ctx: GraphRunCtx, checkpointer: Supabase
         .filter(Boolean)
         .join("\n");
 
+      // Manager Approval Queue (spec §51-53): amount routes through the
+      // estimate_amount_low/high policy family, discount rate (if any)
+      // through discount_low/high — merged into one ordered chain (manager
+      // before ceo, deduped). Empty steps (no matching/seeded policy) falls
+      // back to decideApproval's legacy CEO-only path.
+      const policies = await loadApprovalPolicies(ctx.supabase, ctx.tenantId);
+      const { steps, policyCodes } = computeApprovalSteps(policies, [
+        { codePrefix: "estimate_amount", context: { amount: estimate?.total as number | undefined } },
+        { codePrefix: "discount", context: { discountRate } },
+      ]);
+
       const approvalId = await createApprovalRequest(ctx, {
         type: "proposal_approval",
         subjectType: "proposal",
@@ -254,6 +266,8 @@ export function buildProposalDraftGraph(ctx: GraphRunCtx, checkpointer: Supabase
         riskLevel: highRisk ? "HIGH" : "MEDIUM",
         aiRecommendation: state.criticStatus === "PASS" ? "Criticレビュー済み。内容・価格の確認をお願いします。" : "Criticで指摘事項が残っています。",
         requestedByAgentCode: "proposal",
+        steps,
+        policyCode: policyCodes.join(",") || null,
       });
 
       return { approvalRequestId: approvalId, status: "waiting_human" as GraphStatus, currentNode: "request_proposal_approval" };

@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { ForbiddenError, UnauthorizedError } from "@/lib/server/errors";
 
-export type TenantRole = "owner" | "ceo" | "admin" | "member";
+export type TenantRole = "owner" | "ceo" | "admin" | "manager" | "member";
 
 export type SupabaseServerClient = Awaited<ReturnType<typeof createClient>>;
 
@@ -61,3 +61,14 @@ export function assertRole(ctx: TenantContext, allowed: TenantRole[]): void {
 }
 
 export const APPROVER_ROLES: TenantRole[] = ["owner", "ceo", "admin"];
+
+/**
+ * Roles allowed to reach the shared approval-decision endpoint at all (spec
+ * §51-53's Manager Approval Queue). This is intentionally broader than
+ * APPROVER_ROLES: a "manager" may only ever decide the approval types/steps
+ * that `approval_policies` actually route to them — that fine-grained check
+ * happens inside decideApproval() (lib/server/approvals.ts), not here. Every
+ * other route that performs a privileged action directly (send, contract
+ * lost, etc.) keeps using APPROVER_ROLES unchanged.
+ */
+export const DECISION_CAPABLE_ROLES: TenantRole[] = ["owner", "ceo", "admin", "manager"];
