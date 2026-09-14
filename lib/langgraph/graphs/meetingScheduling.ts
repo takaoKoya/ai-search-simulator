@@ -26,7 +26,7 @@ export function buildMeetingSchedulingGraph(ctx: GraphRunCtx, checkpointer: Supa
   return new StateGraph(MeetingSchedulingState)
     .addNode("propose_times", async (state) => {
       const agent = await getAgentByCapability(ctx, "meeting_scheduling", "meeting");
-      const connector = getCalendarConnector();
+      const connector = await getCalendarConnector();
       const slots = connector.proposeSlots(state.opportunityId, 3, 45);
 
       const { data: oppRow } = await ctx.supabase.from("opportunities").select("lead_id").eq("id", state.opportunityId).eq("tenant_id", ctx.tenantId).maybeSingle();

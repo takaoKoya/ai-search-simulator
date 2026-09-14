@@ -42,7 +42,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       throw new ValidationError("Message has no destination address");
     }
 
-    const connector = getEmailConnector();
+    const connector = await getEmailConnector({ supabase, tenantId, userId });
     const idempotencyKey = `send-${message.id}`;
     const sendResult = await connector.send({ to: message.to_address as string, subject: message.subject as string, body: message.body as string }, idempotencyKey);
 

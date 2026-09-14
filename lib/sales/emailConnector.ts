@@ -1,21 +1,22 @@
 /**
  * Email sending connector abstraction (spec §5-6, §12, §81-84).
  *
- * No real Gmail/OAuth integration exists anywhere in this repository (there
- * is no `googleapis`/`nodemailer`/OAuth client code at all — confirmed by
- * repo-wide search before writing this file). Building a "fake" connector
- * that pretends to call Gmail would risk exactly what the product brief
- * prohibits: an unconfirmed external send. Instead this follows the same
- * honesty pattern as `lib/ai/provider.ts`'s `TemplateProvider` and
- * `lib/sales/candidateSource.ts`'s test fixtures — `SimulatedEmailConnector`
- * never makes a network call, deterministically fabricates provider ids, and
- * is the only implementation today. Wiring a real Gmail OAuth connector
- * behind this same `EmailConnector` interface is a documented Phase 5 item.
+ * `SimulatedEmailConnector` never makes a network call, deterministically
+ * fabricates provider ids, and follows the same honesty pattern as
+ * `lib/ai/provider.ts`'s `TemplateProvider`. `GoogleGmailConnector` (Phase
+ * 5, lib/integrations/googleGmailConnector.ts) is the real implementation
+ * behind this exact same interface — `getEmailConnector()` below picks
+ * between them, so no application code (lib/server/approvals.ts, the
+ * outreach graphs, the Final Send Gate route) ever branches on which one it
+ * got.
  *
  * The interface still enforces the real separation the spec requires:
  * `createDraft` (safe, no external effect) is a distinct call from `send`
  * (the one human-gated, idempotency-keyed external action).
  */
+import type { SupabaseServerClient } from "@/lib/server/tenant";
+import { loadConnection } from "@/lib/integrations/tokenStore";
+import { GoogleGmailConnector } from "@/lib/integrations/googleGmailConnector";
 
 export interface EmailDraftInput {
   to: string;
@@ -70,6 +71,25 @@ export class SimulatedEmailConnector implements EmailConnector {
   }
 }
 
-export function getEmailConnector(): EmailConnector {
+/**
+ * Returns a real GoogleGmailConnector only when the caller identifies a
+ * specific tenant+user AND that user has a `connected` google
+ * integration_connections row AND Google OAuth is actually configured in
+ * this environment (`GOOGLE_OAUTH_CLIENT_ID` set) — every other case
+ * (no ctx, not connected, not configured) safely falls back to the
+ * Simulated connector, exactly like every pre-Phase-5 call site's behavior.
+ * `ctx` is omitted by call sites that only need the connector for a
+ * synchronous, no-network operation regardless of provider (e.g.
+ * meetingScheduling.ts's slot proposal), and always provided by call sites
+ * that might actually send/create something real (Final Send Gate,
+ * decideApproval's sales_send/sales_reply draft creation).
+ */
+export async function getEmailConnector(ctx?: { supabase: SupabaseServerClient; tenantId: string; userId: string }): Promise<EmailConnector> {
+  if (ctx && process.env.GOOGLE_OAUTH_CLIENT_ID) {
+    const connection = await loadConnection(ctx.supabase, ctx.tenantId, ctx.userId, "google");
+    if (connection && connection.status === "connected") {
+      return new GoogleGmailConnector(ctx.supabase, connection);
+    }
+  }
   return new SimulatedEmailConnector();
 }

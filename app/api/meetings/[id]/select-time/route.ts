@@ -38,7 +38,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const chosen = candidates.find((c) => c.start === start && c.end === end);
     if (!chosen) throw new ValidationError("Selected time is not one of the proposed candidates");
 
-    const connector = getCalendarConnector();
+    const connector = await getCalendarConnector({ supabase, tenantId, userId });
     const attendees = ((meeting.participants as Array<{ email?: string }>) ?? []).map((p) => p.email).filter((e): e is string => Boolean(e));
     const event = await connector.createEvent({ title: meeting.title as string, start, end, attendees });
 

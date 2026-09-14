@@ -1,13 +1,16 @@
 /**
  * Calendar connector abstraction (spec §22-24).
  *
- * Same honesty constraint as `emailConnector.ts`: no real Google Calendar
- * integration exists in this repository. `SimulatedCalendarConnector`
- * deterministically proposes business-hours candidate slots (weekdays only,
- * 10:00/14:00/16:00 JST-equivalent) and fabricates a calendar_event_id
- * without ever calling an external API. A real Calendar connector behind
- * this same interface is a Phase 5 item.
+ * `SimulatedCalendarConnector` deterministically proposes business-hours
+ * candidate slots (weekdays only, 10:00/14:00/16:00 JST-equivalent) and
+ * fabricates a calendar_event_id without ever calling an external API.
+ * `GoogleCalendarConnector` (Phase 5, lib/integrations/googleCalendarConnector.ts)
+ * is the real implementation behind this exact same interface —
+ * `getCalendarConnector()` below picks between them.
  */
+import type { SupabaseServerClient } from "@/lib/server/tenant";
+import { loadConnection } from "@/lib/integrations/tokenStore";
+import { GoogleCalendarConnector } from "@/lib/integrations/googleCalendarConnector";
 
 export interface CalendarSlot {
   start: string; // ISO
@@ -98,6 +101,18 @@ export class SimulatedCalendarConnector implements CalendarConnector {
   }
 }
 
-export function getCalendarConnector(): CalendarConnector {
+/**
+ * Same fallback rule as getEmailConnector(): a real GoogleCalendarConnector
+ * only when the caller identifies a tenant+user with a `connected` google
+ * integration_connections row and Google OAuth is configured; otherwise
+ * SimulatedCalendarConnector, exactly like every pre-Phase-5 call site.
+ */
+export async function getCalendarConnector(ctx?: { supabase: SupabaseServerClient; tenantId: string; userId: string }): Promise<CalendarConnector> {
+  if (ctx && process.env.GOOGLE_OAUTH_CLIENT_ID) {
+    const connection = await loadConnection(ctx.supabase, ctx.tenantId, ctx.userId, "google");
+    if (connection && connection.status === "connected") {
+      return new GoogleCalendarConnector(ctx.supabase, connection);
+    }
+  }
   return new SimulatedCalendarConnector();
 }

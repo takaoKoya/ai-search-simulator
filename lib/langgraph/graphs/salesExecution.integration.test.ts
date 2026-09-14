@@ -117,7 +117,7 @@ describe("AI Sales Execution: Phase 4 vertical slice", () => {
 
     // 3. Final Send Gate (human clicks Send Now) — replicated inline since
     // this logic lives in a Next.js route handler, not a lib/ function.
-    const connector = getEmailConnector();
+    const connector = await getEmailConnector();
     const sendResult = await connector.send(
       { to: readyMessage.to_address as string, subject: readyMessage.subject as string, body: readyMessage.body as string },
       `send-${outreachMessageId}`

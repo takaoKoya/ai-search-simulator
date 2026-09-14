@@ -396,7 +396,7 @@ async function applyApproval(ctx: TenantContext, approval: ApprovalRow): Promise
       return { acknowledged: true };
     }
 
-    const connector = getEmailConnector();
+    const connector = await getEmailConnector({ supabase, tenantId, userId });
     const draft = await connector.createDraft({ to: message.to_address as string, subject: message.subject as string, body: message.body as string });
     await supabase
       .from("sales_messages")

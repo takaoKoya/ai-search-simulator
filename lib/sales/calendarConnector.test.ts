@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { SimulatedCalendarConnector } from "@/lib/sales/calendarConnector";
+import { afterEach, describe, expect, it } from "vitest";
+import { FakeSupabase } from "@/lib/testing/fakeSupabase";
+import { getCalendarConnector, SimulatedCalendarConnector } from "@/lib/sales/calendarConnector";
 
 describe("SimulatedCalendarConnector", () => {
   it("proposes only weekday business-hours slots", () => {
@@ -28,5 +29,34 @@ describe("SimulatedCalendarConnector", () => {
     const a = await connector.createEvent(input);
     const b = await connector.createEvent(input);
     expect(a.eventId).toBe(b.eventId);
+  });
+});
+
+describe("getCalendarConnector (real-vs-simulated fallback)", () => {
+  const originalClientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+
+  afterEach(() => {
+    process.env.GOOGLE_OAUTH_CLIENT_ID = originalClientId;
+  });
+
+  it("returns the Simulated connector when no ctx is given (e.g. automatic slot-proposal graph steps)", async () => {
+    const connector = await getCalendarConnector();
+    expect(connector.isReal).toBe(false);
+  });
+
+  it("returns the Simulated connector when not configured/connected", async () => {
+    delete process.env.GOOGLE_OAUTH_CLIENT_ID;
+    const fake = new FakeSupabase();
+    const connector = await getCalendarConnector({ supabase: fake as unknown as never, tenantId: "t1", userId: "u1" });
+    expect(connector.isReal).toBe(false);
+  });
+
+  it("returns the real GoogleCalendarConnector when configured and connected", async () => {
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "configured";
+    const fake = new FakeSupabase();
+    fake.table("integration_connections").push({ id: "c1", tenant_id: "t1", user_id: "u1", provider: "google", status: "connected" });
+    const connector = await getCalendarConnector({ supabase: fake as unknown as never, tenantId: "t1", userId: "u1" });
+    expect(connector.isReal).toBe(true);
+    expect(connector.provider).toBe("google_calendar");
   });
 });
