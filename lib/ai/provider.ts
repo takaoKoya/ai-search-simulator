@@ -10,6 +10,8 @@
  * `AIProvider` and wire it into `getProviderForAgent`.
  */
 
+import { extractActionItemCandidates } from "@/lib/sales/meetingActionItems";
+
 export type AgentTaskType =
   | "company_research"
   | "website_diagnosis_lite"
@@ -546,7 +548,7 @@ export class TemplateProvider implements AIProvider {
         questions: [],
         concerns: [],
         risks: [],
-        actionItems: [],
+        actionItems: extractActionItemCandidates(transcript),
         nextStep: "UNSET",
       },
     };

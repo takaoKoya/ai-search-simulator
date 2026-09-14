@@ -4,6 +4,7 @@ import { emitEvent, runAgentStep, type GraphRunCtx } from "@/lib/langgraph/conte
 import { lastValue, type GraphStatus } from "@/lib/langgraph/state";
 import { getProviderForAgent } from "@/lib/ai/provider";
 import { addLeadCost } from "@/lib/sales/cost";
+import { findPossibleDuplicate, type ActionItemCandidate } from "@/lib/sales/meetingActionItems";
 
 const MeetingMinutesState = Annotation.Root({
   meetingId: lastValue<string>(),
@@ -12,6 +13,45 @@ const MeetingMinutesState = Annotation.Root({
 });
 
 export type MeetingMinutesStateType = typeof MeetingMinutesState.State;
+
+/**
+ * Materializes extracted action-item candidates as real
+ * `meeting_action_items` rows (spec §21-26): each stays a human-reviewable
+ * CANDIDATE (owner/due_date left null — never guessed), and is checked
+ * against every non-rejected action item already on this Opportunity so a
+ * likely repeat is flagged (`possible_duplicate_of`) for a human to see —
+ * never silently dropped or auto-merged.
+ */
+export async function materializeActionItemCandidates(
+  ctx: GraphRunCtx,
+  params: { meetingId: string; opportunityId: string | null; candidates: ActionItemCandidate[] }
+): Promise<void> {
+  if (params.candidates.length === 0) return;
+
+  let existing: Array<{ id: string; description: string }> = [];
+  if (params.opportunityId) {
+    const { data } = await ctx.supabase
+      .from("meeting_action_items")
+      .select("id, description")
+      .eq("tenant_id", ctx.tenantId)
+      .eq("opportunity_id", params.opportunityId)
+      .neq("status", "REJECTED");
+    existing = (data ?? []) as Array<{ id: string; description: string }>;
+  }
+
+  const rows = params.candidates.map((candidate) => ({
+    tenant_id: ctx.tenantId,
+    meeting_id: params.meetingId,
+    opportunity_id: params.opportunityId,
+    description: candidate.description,
+    status: "CANDIDATE",
+    confidence: "LOW",
+    possible_duplicate_of: findPossibleDuplicate(candidate.description, existing),
+  }));
+
+  const { error } = await ctx.supabase.from("meeting_action_items").insert(rows);
+  if (error) throw error;
+}
 
 /**
  * Meeting Minutes (spec §29-31): draft only, from a transcript already
@@ -53,6 +93,12 @@ export function buildMeetingMinutesGraph(ctx: GraphRunCtx, checkpointer: Supabas
         .eq("tenant_id", ctx.tenantId);
 
       await emitEvent(ctx, { eventType: "meeting.minutes_drafted", message: `${companyName}の商談議事録Draftを作成しました（人間の確認が必要です）`, payload: { meetingId: state.meetingId } });
+
+      await materializeActionItemCandidates(ctx, {
+        meetingId: state.meetingId,
+        opportunityId: (meeting.opportunity_id as string | null) ?? null,
+        candidates: (minutes.actionItems as ActionItemCandidate[] | undefined) ?? [],
+      });
 
       return { status: "completed" as GraphStatus, currentNode: "generate_minutes" };
     })

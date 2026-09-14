@@ -13,14 +13,15 @@ export async function getOpportunityDetailState(ctx: TenantContext, opportunityI
   if (oppError) throw oppError;
   if (!opportunity) throw new NotFoundError("Opportunity not found");
 
-  const [leadRes, meetingsRes, proposalsRes, negotiationFindingsRes, oppApprovalsRes] = await Promise.all([
+  const [leadRes, meetingsRes, proposalsRes, negotiationFindingsRes, oppApprovalsRes, actionItemsRes] = await Promise.all([
     supabase.from("leads").select("id, company_name, industry, region, domain, website").eq("id", opportunity.lead_id as string).eq("tenant_id", tenantId).maybeSingle(),
     supabase.from("meetings").select("*").eq("tenant_id", tenantId).eq("opportunity_id", opportunityId).order("created_at", { ascending: false }),
     supabase.from("proposals").select("*").eq("tenant_id", tenantId).eq("opportunity_id", opportunityId).order("created_at", { ascending: false }),
     supabase.from("findings").select("*").eq("tenant_id", tenantId).eq("lead_id", opportunity.lead_id as string).eq("type", "negotiation_item").order("created_at", { ascending: false }),
     supabase.from("approval_requests").select("*").eq("tenant_id", tenantId).eq("subject_type", "opportunity").eq("subject_id", opportunityId).order("created_at", { ascending: false }),
+    supabase.from("meeting_action_items").select("*").eq("tenant_id", tenantId).eq("opportunity_id", opportunityId).order("created_at", { ascending: false }),
   ]);
-  for (const res of [leadRes, meetingsRes, proposalsRes, negotiationFindingsRes, oppApprovalsRes]) {
+  for (const res of [leadRes, meetingsRes, proposalsRes, negotiationFindingsRes, oppApprovalsRes, actionItemsRes]) {
     if (res.error) throw res.error;
   }
 
@@ -76,6 +77,7 @@ export async function getOpportunityDetailState(ctx: TenantContext, opportunityI
     negotiationItems,
     approvals,
     decisionMemories,
+    actionItems: actionItemsRes.data ?? [],
     events,
   };
 }
