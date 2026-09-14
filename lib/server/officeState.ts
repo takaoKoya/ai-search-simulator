@@ -40,7 +40,7 @@ export async function getOfficeState(ctx: TenantContext) {
     supabase
       .from("approval_requests")
       .select(
-        "id, type, subject_type, subject_id, title, description, risk_level, ai_recommendation, status, requested_by_agent_id, created_at"
+        "id, type, subject_type, subject_id, title, description, risk_level, ai_recommendation, status, requested_by_agent_id, created_at, steps, current_step, sla_status, sla_due_at"
       )
       .eq("tenant_id", tenantId)
       .order("created_at", { ascending: false })

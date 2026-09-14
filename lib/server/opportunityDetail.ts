@@ -28,15 +28,25 @@ export async function getOpportunityDetailState(ctx: TenantContext, opportunityI
   const proposalIds = (proposalsRes.data ?? []).map((p) => p.id as string);
   let estimates: unknown[] = [];
   let proposalApprovals: unknown[] = [];
+  let generatedFiles: unknown[] = [];
   if (proposalIds.length > 0) {
-    const [estimatesRes, approvalsRes] = await Promise.all([
+    const [estimatesRes, approvalsRes, filesRes] = await Promise.all([
       supabase.from("estimates").select("*").eq("tenant_id", tenantId).in("proposal_id", proposalIds).order("created_at", { ascending: false }),
       supabase.from("approval_requests").select("*").eq("tenant_id", tenantId).eq("subject_type", "proposal").in("subject_id", proposalIds).order("created_at", { ascending: false }),
+      supabase
+        .from("generated_files")
+        .select("id, entity_id, file_type, classification, byte_size, rendered_at")
+        .eq("tenant_id", tenantId)
+        .eq("entity_type", "proposal")
+        .in("entity_id", proposalIds)
+        .order("rendered_at", { ascending: false }),
     ]);
     if (estimatesRes.error) throw estimatesRes.error;
     if (approvalsRes.error) throw approvalsRes.error;
+    if (filesRes.error) throw filesRes.error;
     estimates = estimatesRes.data ?? [];
     proposalApprovals = approvalsRes.data ?? [];
+    generatedFiles = filesRes.data ?? [];
   }
 
   const negotiationItems = (negotiationFindingsRes.data ?? []).filter((f) => (f.payload as { opportunityId?: string })?.opportunityId === opportunityId);
@@ -74,6 +84,7 @@ export async function getOpportunityDetailState(ctx: TenantContext, opportunityI
     meetings: meetingsRes.data ?? [],
     proposals: proposalsRes.data ?? [],
     estimates,
+    generatedFiles,
     negotiationItems,
     approvals,
     decisionMemories,

@@ -62,7 +62,11 @@ export default function OfficeApp({
   const inFlight = useRef(false);
   const projectsSectionRef = useRef<HTMLDivElement | null>(null);
 
-  const canApprove = role === "owner" || role === "ceo" || role === "admin";
+  // "manager" can decide the specific step approval_policies routes to them
+  // (Manager Approval Queue, spec §51-53) — the fine-grained per-step check
+  // still happens server-side in decideApproval(); this only gates whether
+  // the UI attempts the call at all.
+  const canApprove = role === "owner" || role === "ceo" || role === "admin" || role === "manager";
 
   const refresh = useCallback(async () => {
     if (inFlight.current) return;
@@ -287,11 +291,12 @@ export default function OfficeApp({
           onClose={() => setInboxOpen(false)}
           onDecide={async (id, action, reason, editNote) => {
             if (!canApprove) {
-              setToast("この操作にはCEO/管理者権限が必要です");
+              setToast("この操作にはManager/CEO/管理者権限が必要です");
               return;
             }
             await callApi(`/api/approvals/${id}/decide`, { body: JSON.stringify({ action, reason, editNote }) });
           }}
+          currentRole={role}
         />
       )}
 

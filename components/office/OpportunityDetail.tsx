@@ -104,6 +104,8 @@ export default function OpportunityDetail({
   const proposals = state.proposals as Array<Record<string, unknown>>;
   const estimates = state.estimates as Array<Record<string, unknown>>;
   const negotiationItems = state.negotiationItems as Array<{ id: string; payload: Record<string, unknown>; created_at: string }>;
+  const generatedFiles = state.generatedFiles as Array<Record<string, unknown>>;
+  const actionItems = state.actionItems as Array<Record<string, unknown>>;
   const approvals = state.approvals as Array<{
     id: string;
     type: string;
@@ -313,6 +315,8 @@ export default function OpportunityDetail({
                 {proposals.map((p) => {
                   const id = p.id as string;
                   const estimate = estimateByProposalId.get(id);
+                  const files = generatedFiles.filter((f) => f.entity_id === id);
+                  const canPackage = ["APPROVED", "SENT", "ACCEPTED"].includes(p.status as string);
                   return (
                     <li key={id} className="rounded-lg border p-3 text-[12px]" style={{ borderColor: "var(--office-border)" }}>
                       <div className="flex items-center justify-between">
@@ -338,12 +342,115 @@ export default function OpportunityDetail({
                         </button>
                       )}
                       {p.status === "SENT" && <p style={{ color: "var(--office-status-completed)" }}>✓ 送付済み（{String(p.sent_at ?? "")}）</p>}
+
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <button
+                          disabled={busyKey === `gen-pdf-${id}`}
+                          onClick={() => call(`gen-pdf-${id}`, `/api/proposals/${id}/generate-file`, { fileType: "PDF" })}
+                          className="rounded border px-2 py-1 text-[11px] font-semibold disabled:opacity-50"
+                          style={{ borderColor: "var(--office-border)", color: "var(--office-text-primary)" }}
+                        >
+                          PDFを生成
+                        </button>
+                        <button
+                          disabled={busyKey === `gen-pptx-${id}`}
+                          onClick={() => call(`gen-pptx-${id}`, `/api/proposals/${id}/generate-file`, { fileType: "PPTX" })}
+                          className="rounded border px-2 py-1 text-[11px] font-semibold disabled:opacity-50"
+                          style={{ borderColor: "var(--office-border)", color: "var(--office-text-primary)" }}
+                        >
+                          PPTXを生成
+                        </button>
+                        {canPackage && (
+                          <button
+                            disabled={busyKey === `pkg-${id}`}
+                            onClick={() => call(`pkg-${id}`, `/api/opportunities/${opportunityId}/delivery-packages`, { proposalId: id })}
+                            className="rounded border px-2 py-1 text-[11px] font-semibold disabled:opacity-50"
+                            style={{ borderColor: "var(--office-border)", color: "var(--office-text-primary)" }}
+                          >
+                            Delivery Packageを作成
+                          </button>
+                        )}
+                      </div>
+
+                      {files.length > 0 && (
+                        <ul className="mt-2 space-y-1">
+                          {files.map((f) => (
+                            <li key={f.id as string} className="flex items-center gap-2" style={{ color: "var(--office-text-secondary)" }}>
+                              <span>{f.file_type as string}</span>
+                              <span
+                                className="rounded-full px-1.5 py-0.5 text-[10px] font-bold"
+                                style={{ color: f.classification === "CLIENT_VISIBLE" ? "var(--office-status-completed)" : "var(--office-text-muted)" }}
+                              >
+                                {f.classification as string}
+                              </span>
+                              <a href={`/api/generated-files/${f.id}/download`} target="_blank" rel="noreferrer" className="underline" style={{ color: "var(--office-ai-accent)" }}>
+                                ダウンロード
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </li>
                   );
                 })}
               </ul>
             )}
           </Section>
+
+          {actionItems.length > 0 && (
+            <Section title="Meeting Action Items">
+              <ul className="space-y-2">
+                {actionItems.map((item) => {
+                  const id = item.id as string;
+                  const status = item.status as string;
+                  return (
+                    <li key={id} className="rounded-lg border p-3 text-[12px]" style={{ borderColor: "var(--office-border)" }}>
+                      <div className="flex items-center justify-between">
+                        <p style={{ color: "var(--office-text-secondary)" }}>{item.description as string}</p>
+                        <span style={{ color: "var(--office-text-muted)" }}>{status}</span>
+                      </div>
+                      {Boolean(item.possible_duplicate_of) && (
+                        <p className="mt-1" style={{ color: "var(--office-status-warning)" }}>
+                          ⚠ 重複の可能性あり（既存のAction Itemと類似）
+                        </p>
+                      )}
+                      {status === "CANDIDATE" && (
+                        <div className="mt-2 flex gap-2">
+                          <button
+                            disabled={busyKey === `confirm-ai-${id}`}
+                            onClick={() => call(`confirm-ai-${id}`, `/api/meeting-action-items/${id}/confirm`, {})}
+                            className="rounded px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
+                            style={{ background: "var(--office-status-completed)" }}
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            disabled={busyKey === `reject-ai-${id}`}
+                            onClick={() => call(`reject-ai-${id}`, `/api/meeting-action-items/${id}/reject`)}
+                            className="rounded border px-2 py-1 text-[11px] font-semibold disabled:opacity-50"
+                            style={{ borderColor: "var(--office-border)", color: "var(--office-text-secondary)" }}
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      )}
+                      {status === "CONFIRMED" && (
+                        <button
+                          disabled={busyKey === `convert-ai-${id}`}
+                          onClick={() => call(`convert-ai-${id}`, `/api/meeting-action-items/${id}/convert-to-task`)}
+                          className="mt-2 rounded px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
+                          style={{ background: "var(--office-ai-accent)" }}
+                        >
+                          Project Taskに変換
+                        </button>
+                      )}
+                      {status === "CONVERTED_TO_TASK" && <p className="mt-1" style={{ color: "var(--office-status-completed)" }}>✓ Taskに変換済み</p>}
+                    </li>
+                  );
+                })}
+              </ul>
+            </Section>
+          )}
 
           <Section title="Negotiation">
             <div className="mb-3 flex flex-wrap items-end gap-2">

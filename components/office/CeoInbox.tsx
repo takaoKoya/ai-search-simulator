@@ -11,6 +11,11 @@ export interface SalesLeadInfo {
   whyNow: string | null;
 }
 
+export interface ApprovalStep {
+  role: string;
+  status?: string;
+}
+
 export interface InboxApproval {
   id: string;
   type: string;
@@ -27,6 +32,10 @@ export interface InboxApproval {
   urgency?: "CRITICAL" | "HIGH" | "NORMAL" | "LOW";
   salesLeadInfo?: SalesLeadInfo | null;
   opportunityId?: string | null;
+  steps?: ApprovalStep[] | null;
+  current_step?: number | null;
+  sla_status?: "ON_TRACK" | "DUE_SOON" | "BREACHED" | "COMPLETED" | null;
+  sla_due_at?: string | null;
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -66,10 +75,45 @@ const URGENCY_VAR: Record<string, string> = {
 
 const URGENCY_ORDER: Record<string, number> = { CRITICAL: 0, HIGH: 1, NORMAL: 2, LOW: 3 };
 
+const SLA_LABEL: Record<string, string> = { ON_TRACK: "SLA: 順調", DUE_SOON: "SLA: 期限間近", BREACHED: "SLA: 超過", COMPLETED: "SLA: 完了" };
+const SLA_VAR: Record<string, string> = { ON_TRACK: "--office-status-completed", DUE_SOON: "--office-status-warning", BREACHED: "--office-status-failed", COMPLETED: "--office-text-muted" };
+
+/** Manager Approval Queue (spec §51-53): renders the step chain and highlights whose turn it is. */
+function StepChain({ steps, currentStep, currentRole }: { steps: ApprovalStep[]; currentStep: number; currentRole?: string }) {
+  const isSuperuser = currentRole === "owner" || currentRole === "ceo" || currentRole === "admin";
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]" style={{ color: "var(--office-text-secondary)" }}>
+      <span style={{ color: "var(--office-text-muted)" }}>承認フロー:</span>
+      {steps.map((step, i) => {
+        const isCurrent = i === currentStep;
+        const isMyTurn = isCurrent && (currentRole === step.role || isSuperuser);
+        return (
+          <span key={i} className="flex items-center gap-1">
+            <span
+              className="rounded-full border px-2 py-0.5 font-semibold"
+              style={{
+                borderColor: isCurrent ? "var(--office-ai-accent)" : "var(--office-border)",
+                background: isMyTurn ? "color-mix(in srgb, var(--office-ai-accent) 15%, transparent)" : "transparent",
+                color: step.status === "APPROVED" ? "var(--office-status-completed)" : isCurrent ? "var(--office-ai-accent)" : "var(--office-text-muted)",
+              }}
+            >
+              {step.role}
+              {step.status === "APPROVED" && " ✓"}
+              {isMyTurn && "（あなたの番）"}
+            </span>
+            {i < steps.length - 1 && <span style={{ color: "var(--office-text-muted)" }}>→</span>}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function CeoInbox({
   approvals,
   onDecide,
   onClose,
+  currentRole,
 }: {
   approvals: InboxApproval[];
   onDecide: (
@@ -79,6 +123,7 @@ export default function CeoInbox({
     editNote?: string
   ) => Promise<void>;
   onClose: () => void;
+  currentRole?: string;
 }) {
   const [openReasonFor, setOpenReasonFor] = useState<string | null>(null);
   const [reasonAction, setReasonAction] = useState<"reject" | "revise" | "do_not_contact">("reject");
@@ -151,7 +196,15 @@ export default function CeoInbox({
                     Risk: {a.risk_level}
                   </span>
                 )}
+                {a.sla_status && (
+                  <span className="text-[11px] font-semibold" style={{ color: `var(${SLA_VAR[a.sla_status]})` }}>
+                    {SLA_LABEL[a.sla_status]}
+                    {a.sla_due_at && a.sla_status !== "COMPLETED" ? `（${new Date(a.sla_due_at).toLocaleString("ja-JP")}まで）` : ""}
+                  </span>
+                )}
               </div>
+
+              {a.steps && a.steps.length > 0 && <StepChain steps={a.steps} currentStep={a.current_step ?? 0} currentRole={currentRole} />}
 
               <h3 className="mt-2 font-semibold">{a.title}</h3>
               <dl className="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]" style={{ color: "var(--office-text-secondary)" }}>
