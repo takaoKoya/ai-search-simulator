@@ -2,37 +2,15 @@
 
 import { useTransition } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  approveIdeaForThreadsAction,
-  approveIdeaForNoteFreeAction,
-  approveIdeaForNotePaidAction,
-  holdIdeaAction,
-  rejectIdeaAction,
-} from "@/lib/growth-os/actions";
+import { approveIdeaAction, holdIdeaAction, rejectIdeaAction } from "@/lib/growth-os/actions";
 
 export function IdeaApprovalActions({ ideaId }: { ideaId: string }) {
   const [isPending, startTransition] = useTransition();
 
   return (
     <div className="flex flex-wrap gap-2">
-      <Button size="md" disabled={isPending} onClick={() => startTransition(() => approveIdeaForThreadsAction(ideaId))}>
-        Threadsを作る
-      </Button>
-      <Button
-        size="md"
-        className="bg-white text-neutral-900 ring-1 ring-inset ring-gray-200 hover:bg-gray-50"
-        disabled={isPending}
-        onClick={() => startTransition(() => approveIdeaForNoteFreeAction(ideaId))}
-      >
-        無料noteを作る
-      </Button>
-      <Button
-        size="md"
-        className="bg-white text-neutral-900 ring-1 ring-inset ring-gray-200 hover:bg-gray-50"
-        disabled={isPending}
-        onClick={() => startTransition(() => approveIdeaForNotePaidAction(ideaId))}
-      >
-        有料note候補
+      <Button size="md" disabled={isPending} onClick={() => startTransition(() => approveIdeaAction(ideaId))}>
+        APPROVE(採用)
       </Button>
       <Button
         size="md"
@@ -40,7 +18,7 @@ export function IdeaApprovalActions({ ideaId }: { ideaId: string }) {
         disabled={isPending}
         onClick={() => startTransition(() => holdIdeaAction(ideaId))}
       >
-        保留
+        HOLD(保留)
       </Button>
       <Button
         size="md"
@@ -48,7 +26,7 @@ export function IdeaApprovalActions({ ideaId }: { ideaId: string }) {
         disabled={isPending}
         onClick={() => startTransition(() => rejectIdeaAction(ideaId))}
       >
-        却下
+        REJECT(却下)
       </Button>
     </div>
   );

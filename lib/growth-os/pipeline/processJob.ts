@@ -1,48 +1,79 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { AiJob } from "@/lib/growth-os/types";
-import { completeJob, enqueueJob, failJob } from "@/lib/growth-os/db/jobs";
+import type { AiJob, HarmType, IdeaScoreReasonEntry } from "@/lib/growth-os/types";
+import { completeJob, enqueueJob, failJob, type JobUsage } from "@/lib/growth-os/db/jobs";
 import { insertAiReview } from "@/lib/growth-os/db/reviews";
-import { classifyResearchItem } from "@/lib/growth-os/agents/researchClassifier";
-import { scoreIdea } from "@/lib/growth-os/agents/ideaScorer";
+import { getAIProvider } from "@/lib/growth-os/ai/anthropicProvider";
+import { computeContentHash } from "@/lib/growth-os/hash";
+import { updateResearchAnalysis, markResearchPromoted } from "@/lib/growth-os/db/research";
+import { listIdeaEvidence, linkIdeaSources } from "@/lib/growth-os/db/ideaSources";
+import { insertGeneratedIdeas, listIdeas, applyIdeaScoring, type IdeaScoringPatch } from "@/lib/growth-os/db/ideas";
+import {
+  computeTotalScore,
+  defaultStatusForScore,
+  scoreReasonToColumns,
+  validateScoreReason,
+} from "@/lib/growth-os/scoring";
+import { computeConfidence, computeFreshnessScore, judgeIdea, CONFIDENCE_JUDGMENT_LABELS } from "@/lib/growth-os/confidence";
+import { findMostSimilarIdea, isDuplicate, type IdeaSimilarityCandidate } from "@/lib/growth-os/dedupe";
 import { generateThreadsPatterns, analyzeThreadsTone } from "@/lib/growth-os/agents/threadsGenerator";
 import { suggestProduct } from "@/lib/growth-os/agents/productSuggester";
 import { adviseOnAnalytics } from "@/lib/growth-os/agents/analyticsAdvisor";
 import { advanceArticlePipeline } from "@/lib/growth-os/pipeline/articlePipeline";
 import { aggregateByTheme, listContentMetrics } from "@/lib/growth-os/db/metrics";
 import { SETTINGS_KEYS, upsertSetting } from "@/lib/growth-os/db/settings";
+import type { AIUsage } from "@/lib/growth-os/ai/types";
+
+interface DispatchResult {
+  result: unknown;
+  usage?: JobUsage;
+}
+
+function toJobUsage(usage: AIUsage): JobUsage {
+  return {
+    model: usage.model,
+    input_tokens: usage.input_tokens,
+    output_tokens: usage.output_tokens,
+    estimated_cost: usage.estimated_cost,
+  };
+}
 
 /** ジョブキューから取り出した1件を処理する。失敗時はfailJobでリトライ枠を消費する。 */
 export async function processJob(supabase: SupabaseClient, job: AiJob): Promise<void> {
   try {
-    const result = await dispatch(supabase, job);
-    await completeJob(supabase, job.id, result ?? null);
+    const { result, usage } = await dispatch(supabase, job);
+    await completeJob(supabase, job.id, result ?? null, usage);
   } catch (err) {
     await failJob(supabase, job, err instanceof Error ? err.message : String(err));
   }
 }
 
-async function dispatch(supabase: SupabaseClient, job: AiJob): Promise<unknown> {
+async function dispatch(supabase: SupabaseClient, job: AiJob): Promise<DispatchResult> {
   switch (job.job_type) {
     case "RESEARCH_CLASSIFY":
       return handleResearchClassify(supabase, job);
+    case "IDEA_GENERATE":
+      return handleIdeaGenerate(supabase, job);
     case "IDEA_SCORE":
       return handleIdeaScore(supabase, job);
     case "THREADS_GENERATE":
-      return handleThreadsGenerate(supabase, job);
+      return { result: await handleThreadsGenerate(supabase, job) };
     case "THREADS_TONE_ANALYZE":
-      return handleThreadsToneAnalyze(supabase, job);
+      return { result: await handleThreadsToneAnalyze(supabase, job) };
     case "ARTICLE_ADVANCE":
-      return handleArticleAdvance(supabase, job);
+      return { result: await handleArticleAdvance(supabase, job) };
     case "PRODUCT_SUGGEST":
-      return handleProductSuggest(supabase, job);
+      return { result: await handleProductSuggest(supabase, job) };
     case "ANALYTICS_ADVISE":
-      return handleAnalyticsAdvise(supabase, job);
+      return { result: await handleAnalyticsAdvise(supabase, job) };
     default:
       throw new Error(`未知のjob_type: ${job.job_type}`);
   }
 }
 
-async function handleResearchClassify(supabase: SupabaseClient, job: AiJob) {
+// ---------------------------------------------------------------------------
+// Research: AI分析(HARM分類 + 表面/深層の悩み + 感情トリガー)
+// ---------------------------------------------------------------------------
+async function handleResearchClassify(supabase: SupabaseClient, job: AiJob): Promise<DispatchResult> {
   const { data: item, error } = await supabase
     .from("gos_research_items")
     .select("*")
@@ -50,50 +81,186 @@ async function handleResearchClassify(supabase: SupabaseClient, job: AiJob) {
     .single();
   if (error) throw error;
 
-  const classification = await classifyResearchItem(item);
+  // 内容に変更がなければ再解析しない(同一ハッシュ・解析済みならスキップしてコストを節約)。
+  const currentHash = computeContentHash(item.title, item.raw_text, item.summary);
+  if (item.content_hash === currentHash && item.analysis_version > 0) {
+    return { result: { skipped: true, reason: "内容に変更がないため再解析をスキップしました" } };
+  }
 
-  await supabase
-    .from("gos_research_items")
-    .update({
-      harm_type: classification.harm_type,
-      trend_score: classification.trend_score,
-      pain_score: classification.pain_score,
-      status: "REVIEWED",
-    })
-    .eq("id", job.target_id);
+  const analysis = await getAIProvider().analyzeResearch({
+    title: item.title,
+    summary: item.summary,
+    rawText: item.raw_text,
+    sourceName: item.source_name,
+    keyword: item.keyword,
+  });
+
+  await updateResearchAnalysis(supabase, job.target_id, {
+    harm_types: analysis.data.harm_types as HarmType[],
+    surface_problem: analysis.data.surface_problem,
+    deep_problem: analysis.data.deep_problem,
+    emotional_trigger: analysis.data.emotional_trigger,
+    trend_score: analysis.data.trend_score,
+    pain_score: analysis.data.pain_score,
+    content_hash: currentHash,
+    analysis_version: item.analysis_version + 1,
+  });
 
   await insertAiReview(supabase, job.user_id, {
     target_type: "RESEARCH_ITEM",
     target_id: job.target_id,
     agent_type: "RESEARCH_CLASSIFIER",
-    feedback: classification.reasoning,
-    raw_response: classification,
+    feedback: analysis.data.reasoning,
+    raw_response: analysis.data,
   });
 
-  return classification;
+  return { result: analysis.data, usage: toJobUsage(analysis.usage) };
 }
 
-async function handleIdeaScore(supabase: SupabaseClient, job: AiJob) {
+// ---------------------------------------------------------------------------
+// Idea生成: Research(単一/複数)からコンテンツテーマ候補を作成し、
+// 生成直後にIDEA_SCOREジョブも自動で積む(「生成→採点」を1操作で完結させる)。
+// ---------------------------------------------------------------------------
+async function handleIdeaGenerate(supabase: SupabaseClient, job: AiJob): Promise<DispatchResult> {
+  const researchItemIds =
+    job.target_type === "RESEARCH_ITEM_SET" ? (job.payload.research_item_ids as string[]) : [job.target_id];
+
+  const { data: researchItems, error } = await supabase
+    .from("gos_research_items")
+    .select("*")
+    .in("id", researchItemIds);
+  if (error) throw error;
+  if (!researchItems || researchItems.length === 0) throw new Error("Research item(s) not found");
+
+  const generation = await getAIProvider().generateIdeas({
+    sources: researchItems.map((r) => ({
+      title: r.title,
+      summary: r.summary,
+      surfaceProblem: r.surface_problem,
+      deepProblem: r.deep_problem,
+      emotionalTrigger: r.emotional_trigger,
+      harmTypes: r.harm_types,
+    })),
+  });
+
+  const primaryResearchItemId = researchItems[0].id;
+  const createdIdeas = await insertGeneratedIdeas(supabase, job.user_id, generation.data, primaryResearchItemId);
+
+  for (const idea of createdIdeas) {
+    await linkIdeaSources(
+      supabase,
+      job.user_id,
+      idea.id,
+      researchItems.map((r) => ({ research_item_id: r.id, evidence: r.summary ?? r.title }))
+    );
+
+    await insertAiReview(supabase, job.user_id, {
+      target_type: "IDEA",
+      target_id: idea.id,
+      agent_type: "IDEA_GENERATOR",
+      feedback: `${researchItems.length}件のResearchから生成`,
+      raw_response: idea,
+    });
+
+    await enqueueJob(supabase, job.user_id, "IDEA_SCORE", "IDEA", idea.id);
+  }
+
+  await markResearchPromoted(
+    supabase,
+    researchItems.map((r) => r.id)
+  );
+
+  return {
+    result: { created_idea_ids: createdIdeas.map((i) => i.id) },
+    usage: toJobUsage(generation.usage),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Idea採点: 9軸スコア + Confidence(根拠の強さ) + 重複検出
+// ---------------------------------------------------------------------------
+async function handleIdeaScore(supabase: SupabaseClient, job: AiJob): Promise<DispatchResult> {
   const { data: idea, error } = await supabase.from("gos_content_ideas").select("*").eq("id", job.target_id).single();
   if (error) throw error;
 
-  const scored = await scoreIdea(idea);
+  const evidence = await listIdeaEvidence(supabase, job.user_id, idea.id);
+  const evidenceSummaries = evidence.map(
+    (e) => `${e.researchItem.title}: ${e.researchItem.summary ?? e.researchItem.surface_problem ?? ""}`
+  );
 
-  await supabase
-    .from("gos_content_ideas")
-    .update({ score_breakdown: scored.score_breakdown, total_score: scored.total_score })
-    .eq("id", job.target_id);
-
-  await insertAiReview(supabase, job.user_id, {
-    target_type: "IDEA",
-    target_id: job.target_id,
-    agent_type: "IDEA_SCORER",
-    score: scored.total_score,
-    raw_response: scored.score_breakdown,
+  const scored = await getAIProvider().scoreIdea({
+    title: idea.title,
+    hook: idea.hook,
+    angle: idea.angle,
+    targetPersona: idea.target_persona,
+    coreProblem: idea.core_problem,
+    evidenceSummaries,
   });
 
-  return scored;
+  const entries: IdeaScoreReasonEntry[] = scored.data.scores;
+  const validationErrors = validateScoreReason(entries);
+  if (validationErrors.length > 0) {
+    throw new Error(`Idea Scorerの出力が不正です: ${validationErrors.join(" / ")}`);
+  }
+
+  const totalScore = computeTotalScore(entries);
+  const evidenceCount = evidence.length;
+  const sourceCount = new Set(evidence.map((e) => e.researchItem.source_name)).size;
+  const freshnessScore = computeFreshnessScore(evidence.map((e) => new Date(e.researchItem.collected_at)));
+  const confidenceScore = computeConfidence({
+    evidenceCount,
+    sourceCount,
+    freshnessScore,
+    aiSelfAssessedConfidence: scored.data.confidence_self_assessment,
+  });
+
+  const existingIdeas = await listIdeas(supabase, job.user_id);
+  const candidate: IdeaSimilarityCandidate = {
+    id: idea.id,
+    title: idea.title,
+    hook: idea.hook,
+    coreProblem: idea.core_problem,
+    targetPersona: idea.target_persona,
+  };
+  const others: IdeaSimilarityCandidate[] = existingIdeas
+    .filter((i) => i.id !== idea.id)
+    .map((i) => ({ id: i.id, title: i.title, hook: i.hook, coreProblem: i.core_problem, targetPersona: i.target_persona }));
+  const match = findMostSimilarIdea(candidate, others);
+
+  // 人間が既にAPPROVE/REJECTしたIdeaを再採点しても、その決定は上書きしない。
+  const status =
+    idea.status === "APPROVED" || idea.status === "REJECTED" ? idea.status : defaultStatusForScore(totalScore);
+
+  const patch: IdeaScoringPatch = {
+    ...(scoreReasonToColumns(entries) as Omit<IdeaScoringPatch, "score_reason" | "confidence_score" | "evidence_count" | "source_count" | "freshness_score" | "duplicate_score" | "most_similar_idea_id" | "status">),
+    score_reason: entries,
+    confidence_score: confidenceScore,
+    evidence_count: evidenceCount,
+    source_count: sourceCount,
+    freshness_score: freshnessScore,
+    duplicate_score: match?.score ?? null,
+    most_similar_idea_id: match && isDuplicate(match.score) ? match.idea.id : null,
+    status,
+  };
+
+  const updated = await applyIdeaScoring(supabase, idea.id, patch);
+
+  const judgment = judgeIdea(totalScore, confidenceScore);
+  await insertAiReview(supabase, job.user_id, {
+    target_type: "IDEA",
+    target_id: idea.id,
+    agent_type: "IDEA_SCORER",
+    score: totalScore,
+    feedback: `信頼度${confidenceScore}%(${CONFIDENCE_JUDGMENT_LABELS[judgment]})。根拠件数${evidenceCount}件、出典${sourceCount}種類。`,
+    raw_response: entries,
+  });
+
+  return { result: updated, usage: toJobUsage(scored.usage) };
 }
+
+// ---------------------------------------------------------------------------
+// 以下、フェーズ1のThreads/note/Products/Analyticsは本フェーズでは変更しない。
+// ---------------------------------------------------------------------------
 
 async function handleThreadsGenerate(supabase: SupabaseClient, job: AiJob) {
   const { data: idea, error } = await supabase.from("gos_content_ideas").select("*").eq("id", job.target_id).single();

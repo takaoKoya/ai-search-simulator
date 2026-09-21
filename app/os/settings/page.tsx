@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { requireGrowthOsUser } from "@/lib/growth-os/auth";
 import { countJobsCreatedToday, getDailyAiJobLimit } from "@/lib/growth-os/db/settings";
+import { sumEstimatedCostThisMonth } from "@/lib/growth-os/db/jobs";
 import { updateDailyJobLimitAction } from "@/lib/growth-os/actions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,14 +14,30 @@ export const metadata: Metadata = { title: "Settings | note Growth OS" };
 
 export default async function SettingsPage() {
   const { supabase, userId } = await requireGrowthOsUser();
-  const [limit, usedToday] = await Promise.all([
+  const [limit, usedToday, monthlyCostUsd] = await Promise.all([
     getDailyAiJobLimit(supabase, userId),
     countJobsCreatedToday(supabase, userId),
+    sumEstimatedCostThisMonth(supabase, userId),
   ]);
 
   return (
     <div>
       <PageHeader title="Settings" subtitle="AI利用の予算上限とスコア基準を確認・調整する" />
+
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle>今月のAI使用量</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="font-mono text-2xl font-semibold text-neutral-900">
+            ${monthlyCostUsd.toFixed(4)}
+            <span className="ml-2 text-sm font-normal text-gray-400">(概算・Anthropic公式料金表ベース)</span>
+          </p>
+          <p className="mt-1 text-xs text-gray-400">
+            gos_ai_jobsに記録されたinput/output tokens×モデル別単価から算出した参考値です。実際の請求額はAnthropicコンソールを確認してください。
+          </p>
+        </CardContent>
+      </Card>
 
       <Card className="mb-6">
         <CardHeader>
@@ -82,7 +99,8 @@ export default async function SettingsPage() {
             </tbody>
           </table>
           <p className="mt-3 text-xs text-gray-400">
-            90点以上=最優先 / 85〜89点=制作候補 / 75〜84点=保留 / 74点以下=原則不採用
+            90点以上=最優先候補 / 85〜89点=制作候補 / 75〜84点=保留候補 / 74点以下=低優先(表示ラベルはtotal_scoreの帯によるもので、
+            statusとは別に算出されます)
           </p>
         </CardContent>
       </Card>

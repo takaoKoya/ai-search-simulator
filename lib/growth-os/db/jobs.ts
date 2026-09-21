@@ -26,16 +26,31 @@ export async function dequeueNextJob(supabase: SupabaseClient) {
   return (data ?? null) as AiJob | null;
 }
 
-export async function completeJob(supabase: SupabaseClient, id: string, result: unknown) {
-  const { error } = await supabase.from("gos_ai_jobs").update({ status: "SUCCEEDED", result }).eq("id", id);
+export interface JobUsage {
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_cost: number;
+}
+
+export async function completeJob(supabase: SupabaseClient, id: string, result: unknown, usage?: JobUsage) {
+  const { error } = await supabase
+    .from("gos_ai_jobs")
+    .update({ status: "SUCCEEDED", result, completed_at: new Date().toISOString(), ...usage })
+    .eq("id", id);
   if (error) throw error;
 }
 
-export async function failJob(supabase: SupabaseClient, job: AiJob, errorMessage: string) {
+export async function failJob(supabase: SupabaseClient, job: AiJob, errorMessage: string, usage?: JobUsage) {
   const status = job.attempt_count >= job.max_attempts ? "FAILED" : "PENDING";
   const { error } = await supabase
     .from("gos_ai_jobs")
-    .update({ status, error: errorMessage })
+    .update({
+      status,
+      error_message: errorMessage,
+      completed_at: status === "FAILED" ? new Date().toISOString() : null,
+      ...usage,
+    })
     .eq("id", job.id);
   if (error) throw error;
 }
@@ -61,4 +76,20 @@ export async function countPendingJobs(supabase: SupabaseClient, userId: string)
 
   if (error) throw error;
   return count ?? 0;
+}
+
+/** Settings画面の「今月のAI使用量」表示用。 */
+export async function sumEstimatedCostThisMonth(supabase: SupabaseClient, userId: string): Promise<number> {
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
+
+  const { data, error } = await supabase
+    .from("gos_ai_jobs")
+    .select("estimated_cost")
+    .eq("user_id", userId)
+    .gte("created_at", monthStart.toISOString());
+
+  if (error) throw error;
+  return (data ?? []).reduce((sum: number, row: { estimated_cost: number }) => sum + Number(row.estimated_cost), 0);
 }
