@@ -28,6 +28,7 @@ export interface Role {
 
 export const PRESIDENT_POSITION = { x: 50, y: 92 };
 export const PRESIDENT_AVATAR_SRC = "/weboffice/characters/president.webp";
+export const PRESIDENT_ALT_AVATAR_SRC = "/weboffice/characters/president-b.webp";
 
 export const ROLES: Role[] = [
   {
@@ -85,7 +86,17 @@ export const ROLES: Role[] = [
     x: 50,
     y: 60,
   },
-  { code: "analytics", label: "分析", agentName: "アナ", emoji: "📊", avatarSrc: "/weboffice/characters/analytics.webp", color: "#a988c9", x: 84, y: 60 },
+  {
+    code: "analytics",
+    label: "分析",
+    agentName: "アナ",
+    emoji: "📊",
+    avatarSrc: "/weboffice/characters/analytics.webp",
+    altAvatarSrc: "/weboffice/characters/analytics-b.webp",
+    color: "#a988c9",
+    x: 84,
+    y: 60,
+  },
 ];
 
 export function roleByCode(code: RoleCode): Role {

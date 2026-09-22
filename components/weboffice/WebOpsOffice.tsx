@@ -7,6 +7,7 @@ import {
   ROLES,
   PRESIDENT_POSITION,
   PRESIDENT_AVATAR_SRC,
+  PRESIDENT_ALT_AVATAR_SRC,
   TIMELINE_EVENTS,
   DAY_START_MINUTE,
   DAY_END_MINUTE,
@@ -89,7 +90,7 @@ export default function WebOpsOffice() {
           const fromRole = event.handoff.from === "president" ? null : roleByCode(event.handoff.from);
           const emoji = fromRole ? fromRole.emoji : "✅";
           const avatarSrc = fromRole ? fromRole.avatarSrc : PRESIDENT_AVATAR_SRC;
-          const altAvatarSrc = fromRole ? fromRole.altAvatarSrc : undefined;
+          const altAvatarSrc = fromRole ? fromRole.altAvatarSrc : PRESIDENT_ALT_AVATAR_SRC;
           const color = fromRole ? fromRole.color : "#e0c04a";
           const chip: FlyingChip = { id: `${event.id}-chip`, fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, emoji, avatarSrc, altAvatarSrc };
           setChips((cur) => [...cur, chip]);
