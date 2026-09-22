@@ -25,6 +25,7 @@ export interface Role {
 }
 
 export const PRESIDENT_POSITION = { x: 50, y: 92 };
+export const PRESIDENT_AVATAR_SRC = "/weboffice/characters/president.webp";
 
 export const ROLES: Role[] = [
   { code: "research", label: "リサーチ", agentName: "リサ", emoji: "🔍", avatarSrc: "/weboffice/characters/research.webp", color: "#7fae7a", x: 16, y: 24 },

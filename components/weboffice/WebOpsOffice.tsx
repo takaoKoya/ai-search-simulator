@@ -6,6 +6,7 @@ import Image from "next/image";
 import {
   ROLES,
   PRESIDENT_POSITION,
+  PRESIDENT_AVATAR_SRC,
   TIMELINE_EVENTS,
   DAY_START_MINUTE,
   DAY_END_MINUTE,
@@ -77,7 +78,8 @@ export default function WebOpsOffice() {
           const to = positionOf(event.handoff.to);
           const fromRole = event.handoff.from === "president" ? null : roleByCode(event.handoff.from);
           const emoji = fromRole ? fromRole.emoji : "✅";
-          const chip: FlyingChip = { id: `${event.id}-chip`, fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, emoji, avatarSrc: fromRole?.avatarSrc };
+          const avatarSrc = fromRole ? fromRole.avatarSrc : PRESIDENT_AVATAR_SRC;
+          const chip: FlyingChip = { id: `${event.id}-chip`, fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, emoji, avatarSrc };
           setChips((cur) => [...cur, chip]);
           setTimeout(() => setChips((cur) => cur.filter((c) => c.id !== chip.id)), 1400);
         }
@@ -201,6 +203,13 @@ export default function WebOpsOffice() {
 
             {/* President seat */}
             <div className="mt-6 flex items-center justify-center gap-3">
+              <div
+                className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-full border-2"
+                style={{ borderColor: "#e0c04a", background: "#22362f" }}
+                aria-hidden
+              >
+                <Image src={PRESIDENT_AVATAR_SRC} alt="" width={1254} height={1254} className="h-full w-full object-cover" />
+              </div>
               <div className="rounded-lg border px-3 py-2 text-[11px]" style={{ borderColor: "#4a6058", background: "#1f332c" }}>
                 <p className="font-semibold" style={{ color: "#e8e4d8" }}>
                   社長席 / あなた
