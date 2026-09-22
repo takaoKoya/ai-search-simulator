@@ -149,6 +149,7 @@ export default function OfficeApp({
 
   function handleNavigate(key: string) {
     if (key === "office") return;
+    if (key === "webops") return router.push("/webops");
     if (key === "leads") return setLeadsOpen(true);
     if (key === "approvals") return setInboxOpen(true);
     if (key === "projects") return projectsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });

@@ -10,6 +10,7 @@ import {
   FileBarChart,
   Network,
   Settings,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 
@@ -32,6 +33,7 @@ export default function LeftNav({
 }) {
   const items: NavItem[] = [
     { key: "office", label: "Office", icon: LayoutGrid },
+    { key: "webops", label: "WEB運用", icon: Sparkles },
     { key: "leads", label: "Leads", icon: Users },
     { key: "clients", label: "Clients", icon: Building2, comingSoon: true },
     { key: "projects", label: "Projects", icon: Briefcase },
