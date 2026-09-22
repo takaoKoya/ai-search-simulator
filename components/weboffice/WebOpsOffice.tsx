@@ -8,15 +8,18 @@ import {
   PRESIDENT_POSITION,
   PRESIDENT_AVATAR_SRC,
   PRESIDENT_ALT_AVATAR_SRC,
-  TIMELINE_EVENTS,
+  DEFAULT_WEBOPS_INPUT,
+  buildTimelineEvents,
+  scriptEndMinute,
   DAY_START_MINUTE,
   DAY_END_MINUTE,
-  SCRIPT_END_MINUTE,
   formatClock,
   roleByCode,
   type RoleCode,
   type DeskCard,
   type ApprovalItem,
+  type TimelineEvent,
+  type WebOpsInput,
 } from "@/lib/weboffice/script";
 
 /** How many virtual minutes advance per real second while auto-playing. */
@@ -54,6 +57,9 @@ function positionOf(code: RoleCode | "president"): { x: number; y: number } {
  * 台本の進行自体をブロックしない（見た目の体験を優先）。
  */
 export default function WebOpsOffice() {
+  const [input, setInput] = useState<WebOpsInput>(DEFAULT_WEBOPS_INPUT);
+  const [draft, setDraft] = useState<WebOpsInput>(DEFAULT_WEBOPS_INPUT);
+  const [events, setEvents] = useState<TimelineEvent[]>(() => buildTimelineEvents(DEFAULT_WEBOPS_INPUT));
   const [minute, setMinute] = useState(0);
   const [playing, setPlaying] = useState(true);
   const [extraLog, setExtraLog] = useState<string[]>([]);
@@ -62,6 +68,19 @@ export default function WebOpsOffice() {
   const [chips, setChips] = useState<FlyingChip[]>([]);
   const [bubbles, setBubbles] = useState<SpeechBubble[]>([]);
   const prevMinuteRef = useRef(0);
+
+  function startWithInput(nextInput: WebOpsInput) {
+    setInput(nextInput);
+    setEvents(buildTimelineEvents(nextInput));
+    setMinute(0);
+    prevMinuteRef.current = 0;
+    setChips([]);
+    setBubbles([]);
+    setExtraLog([]);
+    setApprovedIds(new Set());
+    setApprovalModal(null);
+    setPlaying(true);
+  }
 
   useEffect(() => {
     if (!playing) return;
@@ -82,7 +101,7 @@ export default function WebOpsOffice() {
   useEffect(() => {
     const prev = prevMinuteRef.current;
     if (minute > prev) {
-      const crossed = TIMELINE_EVENTS.filter((e) => e.minute > prev && e.minute <= minute);
+      const crossed = events.filter((e) => e.minute > prev && e.minute <= minute);
       for (const event of crossed) {
         if (event.handoff) {
           const from = positionOf(event.handoff.from);
@@ -103,38 +122,38 @@ export default function WebOpsOffice() {
       }
     }
     prevMinuteRef.current = minute;
-  }, [minute]);
+  }, [minute, events]);
 
   const roundedMinute = Math.floor(minute);
 
   const deskCards = useMemo(() => {
     const cards: Partial<Record<RoleCode, DeskCard>> = {};
-    for (const event of TIMELINE_EVENTS) {
+    for (const event of events) {
       if (event.minute > roundedMinute) break;
       if (event.deskUpdates) Object.assign(cards, event.deskUpdates);
     }
     return cards;
-  }, [roundedMinute]);
+  }, [events, roundedMinute]);
 
   const activeState = useMemo(() => {
-    let latest: (typeof TIMELINE_EVENTS)[number] | null = null;
-    for (const event of TIMELINE_EVENTS) {
+    let latest: TimelineEvent | null = null;
+    for (const event of events) {
       if (event.minute > roundedMinute) break;
       if (event.active) latest = event;
     }
     return latest?.active ?? null;
-  }, [roundedMinute]);
+  }, [events, roundedMinute]);
 
   const latestApproval = useMemo(() => {
-    let latest: (typeof TIMELINE_EVENTS)[number] | null = null;
-    for (const event of TIMELINE_EVENTS) {
+    let latest: TimelineEvent | null = null;
+    for (const event of events) {
       if (event.minute > roundedMinute) break;
       if (event.approval) latest = event;
     }
     return latest;
-  }, [roundedMinute]);
+  }, [events, roundedMinute]);
 
-  const visibleLog = useMemo(() => TIMELINE_EVENTS.filter((e) => e.minute <= roundedMinute), [roundedMinute]);
+  const visibleLog = useMemo(() => events.filter((e) => e.minute <= roundedMinute), [events, roundedMinute]);
 
   const pendingApprovalCount = latestApproval && !approvedIds.has(latestApproval.id) ? 1 : 0;
 
@@ -182,6 +201,44 @@ export default function WebOpsOffice() {
           <span className="font-mono text-lg font-bold">{formatClock(roundedMinute)}</span>
         </div>
 
+        {/* Settings — regenerates the whole day's content around this store/industry/topic */}
+        <div className="mb-3 rounded-xl border p-3" style={{ borderColor: "#3a4f47", background: "#16241f" }}>
+          <p className="mb-2 text-[11px] font-bold" style={{ color: "#e8e4d8" }}>
+            今日の設定
+          </p>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_1.6fr_auto]">
+            <input
+              value={draft.storeName}
+              onChange={(e) => setDraft((d) => ({ ...d, storeName: e.target.value }))}
+              placeholder="店舗名"
+              className="rounded-lg border px-2 py-1.5 text-[12px] outline-none"
+              style={{ borderColor: "#4a6058", background: "#1f332c", color: "#e8e4d8" }}
+            />
+            <input
+              value={draft.industry}
+              onChange={(e) => setDraft((d) => ({ ...d, industry: e.target.value }))}
+              placeholder="業種"
+              className="rounded-lg border px-2 py-1.5 text-[12px] outline-none"
+              style={{ borderColor: "#4a6058", background: "#1f332c", color: "#e8e4d8" }}
+            />
+            <input
+              value={draft.topic}
+              onChange={(e) => setDraft((d) => ({ ...d, topic: e.target.value }))}
+              placeholder="今日のお題（例：秋の新作メニュー）"
+              className="rounded-lg border px-2 py-1.5 text-[12px] outline-none"
+              style={{ borderColor: "#4a6058", background: "#1f332c", color: "#e8e4d8" }}
+            />
+            <button
+              onClick={() => startWithInput(draft)}
+              disabled={!draft.storeName.trim() || !draft.industry.trim() || !draft.topic.trim()}
+              className="rounded-lg px-3 py-1.5 text-[12px] font-bold disabled:opacity-40"
+              style={{ background: "#e0c04a", color: "#16241f" }}
+            >
+              この設定で始める
+            </button>
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_260px]">
           {/* Office floor */}
           <div className="relative overflow-hidden rounded-xl border p-4" style={{ borderColor: "#3a4f47", background: "#16241f", minHeight: 460 }}>
@@ -193,7 +250,7 @@ export default function WebOpsOffice() {
             </span>
 
             <p className="mb-4 text-[11px]" style={{ color: "#9fb3ab" }}>
-              お店のSNS運用 ・ Instagram / Threads
+              {input.storeName}（{input.industry}）のSNS運用 ・ Instagram / Threads
             </p>
 
             <div className="grid grid-cols-3 gap-4">
@@ -349,11 +406,7 @@ export default function WebOpsOffice() {
           </div>
           {minute >= DAY_END_MINUTE && (
             <button
-              onClick={() => {
-                setMinute(0);
-                setChips([]);
-                setPlaying(true);
-              }}
+              onClick={() => startWithInput(input)}
               className="mt-2 w-full rounded-lg border py-1.5 text-[11px]"
               style={{ borderColor: "#4a6058", color: "#c9d6cf" }}
             >
@@ -363,7 +416,7 @@ export default function WebOpsOffice() {
         </div>
 
         <p className="mt-3 text-center text-[10px]" style={{ color: "#5f746c" }}>
-          このオフィスは台本によるシミュレーションです。実際の画像生成・動画生成・SNS投稿は行われません（スクリプトは{SCRIPT_END_MINUTE}分時点で終了します）。
+          このオフィスは台本によるシミュレーションです。実際の画像生成・動画生成・SNS投稿は行われません（スクリプトは{scriptEndMinute(events)}分時点で終了します）。
         </p>
       </div>
 
