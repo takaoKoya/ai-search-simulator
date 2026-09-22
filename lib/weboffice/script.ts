@@ -16,6 +16,8 @@ export interface Role {
   label: string;
   agentName: string;
   emoji: string;
+  /** Character illustration shown on the desk avatar and hand-off animation; falls back to `emoji` when absent. */
+  avatarSrc?: string;
   color: string;
   /** Grid position as a percentage of the office floor container. */
   x: number;
@@ -25,12 +27,12 @@ export interface Role {
 export const PRESIDENT_POSITION = { x: 50, y: 92 };
 
 export const ROLES: Role[] = [
-  { code: "research", label: "リサーチ", agentName: "リサ", emoji: "🔍", color: "#7fae7a", x: 16, y: 24 },
-  { code: "writing", label: "執筆", agentName: "カク", emoji: "✍️", color: "#c9a25a", x: 50, y: 24 },
-  { code: "ops", label: "運用", agentName: "ラン", emoji: "📮", color: "#d98a5f", x: 84, y: 24 },
-  { code: "production", label: "制作", agentName: "サク", emoji: "🎨", color: "#e0c04a", x: 16, y: 60 },
-  { code: "sales", label: "営業", agentName: "セイ", emoji: "💬", color: "#6c9fc9", x: 50, y: 60 },
-  { code: "analytics", label: "分析", agentName: "アナ", emoji: "📊", color: "#a988c9", x: 84, y: 60 },
+  { code: "research", label: "リサーチ", agentName: "リサ", emoji: "🔍", avatarSrc: "/weboffice/characters/research.webp", color: "#7fae7a", x: 16, y: 24 },
+  { code: "writing", label: "執筆", agentName: "カク", emoji: "✍️", avatarSrc: "/weboffice/characters/writing.webp", color: "#c9a25a", x: 50, y: 24 },
+  { code: "ops", label: "運用", agentName: "ラン", emoji: "📮", avatarSrc: "/weboffice/characters/ops.webp", color: "#d98a5f", x: 84, y: 24 },
+  { code: "production", label: "制作", agentName: "サク", emoji: "🎨", avatarSrc: "/weboffice/characters/production.webp", color: "#e0c04a", x: 16, y: 60 },
+  { code: "sales", label: "営業", agentName: "セイ", emoji: "💬", avatarSrc: "/weboffice/characters/sales.webp", color: "#6c9fc9", x: 50, y: 60 },
+  { code: "analytics", label: "分析", agentName: "アナ", emoji: "📊", avatarSrc: "/weboffice/characters/analytics.webp", color: "#a988c9", x: 84, y: 60 },
 ];
 
 export function roleByCode(code: RoleCode): Role {
@@ -46,6 +48,7 @@ export interface DeskCard {
 
 export interface ApprovalItem {
   agentName: string;
+  role: RoleCode;
   title: string;
   body: string;
 }
@@ -117,6 +120,7 @@ export const TIMELINE_EVENTS: TimelineEvent[] = [
     handoff: { from: "writing", to: "president" },
     approval: {
       agentName: "カク",
+      role: "writing",
       title: "投稿案5本の確認",
       body: "本日分のInstagram/Threads投稿案を5本作成しました。トーン・内容をご確認の上、承認をお願いします（このデモでは実際には投稿されません）。",
     },
@@ -212,6 +216,7 @@ export const TIMELINE_EVENTS: TimelineEvent[] = [
     handoff: { from: "analytics", to: "president" },
     approval: {
       agentName: "アナ",
+      role: "analytics",
       title: "本日の分析メモ",
       body: "本日の投稿リーチ840、フォロワー+36、DM対応12件。反応の良かった話題を踏まえ、明日は動画コンテンツを1本追加することを提案します。",
     },

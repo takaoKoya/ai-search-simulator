@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import {
   ROLES,
   PRESIDENT_POSITION,
@@ -27,6 +28,7 @@ type FlyingChip = {
   toX: number;
   toY: number;
   emoji: string;
+  avatarSrc?: string;
 };
 
 function positionOf(code: RoleCode | "president"): { x: number; y: number } {
@@ -73,8 +75,9 @@ export default function WebOpsOffice() {
         if (event.handoff) {
           const from = positionOf(event.handoff.from);
           const to = positionOf(event.handoff.to);
-          const emoji = event.handoff.from === "president" ? "✅" : roleByCode(event.handoff.from).emoji;
-          const chip: FlyingChip = { id: `${event.id}-chip`, fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, emoji };
+          const fromRole = event.handoff.from === "president" ? null : roleByCode(event.handoff.from);
+          const emoji = fromRole ? fromRole.emoji : "✅";
+          const chip: FlyingChip = { id: `${event.id}-chip`, fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, emoji, avatarSrc: fromRole?.avatarSrc };
           setChips((cur) => [...cur, chip]);
           setTimeout(() => setChips((cur) => cur.filter((c) => c.id !== chip.id)), 1400);
         }
@@ -178,11 +181,15 @@ export default function WebOpsOffice() {
                       <p style={{ color: "#c9d6cf" }}>{card?.value ?? "―"}</p>
                     </div>
                     <div
-                      className="flex h-16 w-16 items-center justify-center rounded-full border-2 text-2xl transition-transform"
+                      className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full border-2 text-2xl transition-transform"
                       style={{ borderColor: role.color, background: "#22362f", transform: isActive ? "scale(1.08)" : "scale(1)" }}
                       aria-hidden
                     >
-                      {role.emoji}
+                      {role.avatarSrc ? (
+                        <Image src={role.avatarSrc} alt="" width={1254} height={1254} className="h-full w-full object-cover" />
+                      ) : (
+                        role.emoji
+                      )}
                     </div>
                     <p className="text-[12px] font-bold" style={{ color: "#e8e4d8" }}>
                       {role.agentName}
@@ -317,9 +324,22 @@ export default function WebOpsOffice() {
             style={{ borderColor: "#4a6058", background: "#1f332c" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <p className="mb-1 text-[11px]" style={{ color: "#9fb3ab" }}>
-              {approvalModal.agentName} からの承認依頼
-            </p>
+            <div className="mb-1 flex items-center gap-2">
+              {roleByCode(approvalModal.role).avatarSrc && (
+                <div className="h-9 w-9 overflow-hidden rounded-full border" style={{ borderColor: roleByCode(approvalModal.role).color }}>
+                  <Image
+                    src={roleByCode(approvalModal.role).avatarSrc!}
+                    alt=""
+                    width={1254}
+                    height={1254}
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+              )}
+              <p className="text-[11px]" style={{ color: "#9fb3ab" }}>
+                {approvalModal.agentName} からの承認依頼
+              </p>
+            </div>
             <h3 className="mb-2 text-[13px] font-bold" style={{ color: "#e8e4d8" }}>
               {approvalModal.title}
             </h3>
@@ -354,11 +374,11 @@ function FlyingChipDot({ chip }: { chip: FlyingChip }) {
   }, [chip.toX, chip.toY]);
   return (
     <span
-      className="pointer-events-none absolute z-10 text-xl transition-all duration-[1100ms] ease-in-out"
-      style={{ left: `${pos.x}%`, top: `${pos.y}%`, transform: "translate(-50%, -50%)" }}
+      className="pointer-events-none absolute z-10 flex h-9 w-9 items-center justify-center overflow-hidden rounded-full text-xl shadow-lg transition-all duration-[1100ms] ease-in-out"
+      style={{ left: `${pos.x}%`, top: `${pos.y}%`, transform: "translate(-50%, -50%)", background: chip.avatarSrc ? "#22362f" : "transparent" }}
       aria-hidden
     >
-      {chip.emoji}
+      {chip.avatarSrc ? <Image src={chip.avatarSrc} alt="" width={1254} height={1254} className="h-full w-full object-cover" /> : chip.emoji}
     </span>
   );
 }
