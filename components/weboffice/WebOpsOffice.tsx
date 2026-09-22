@@ -32,6 +32,14 @@ type FlyingChip = {
   avatarSrc?: string;
 };
 
+type SpeechBubble = {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+  color: string;
+};
+
 function positionOf(code: RoleCode | "president"): { x: number; y: number } {
   if (code === "president") return PRESIDENT_POSITION;
   return roleByCode(code);
@@ -50,6 +58,7 @@ export default function WebOpsOffice() {
   const [approvalModal, setApprovalModal] = useState<ApprovalItem | null>(null);
   const [approvedIds, setApprovedIds] = useState<Set<string>>(new Set());
   const [chips, setChips] = useState<FlyingChip[]>([]);
+  const [bubbles, setBubbles] = useState<SpeechBubble[]>([]);
   const prevMinuteRef = useRef(0);
 
   useEffect(() => {
@@ -79,9 +88,14 @@ export default function WebOpsOffice() {
           const fromRole = event.handoff.from === "president" ? null : roleByCode(event.handoff.from);
           const emoji = fromRole ? fromRole.emoji : "✅";
           const avatarSrc = fromRole ? fromRole.avatarSrc : PRESIDENT_AVATAR_SRC;
+          const color = fromRole ? fromRole.color : "#e0c04a";
           const chip: FlyingChip = { id: `${event.id}-chip`, fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, emoji, avatarSrc };
           setChips((cur) => [...cur, chip]);
           setTimeout(() => setChips((cur) => cur.filter((c) => c.id !== chip.id)), 1400);
+
+          const bubble: SpeechBubble = { id: `${event.id}-bubble`, x: from.x, y: from.y, text: event.log, color };
+          setBubbles((cur) => [...cur, bubble]);
+          setTimeout(() => setBubbles((cur) => cur.filter((b) => b.id !== bubble.id)), 1600);
         }
       }
     }
@@ -130,6 +144,25 @@ export default function WebOpsOffice() {
 
   return (
     <div className="min-h-screen p-4" style={{ background: "#0f1a17", color: "#e8e4d8" }}>
+      <style>{`
+        @keyframes wo-bob {
+          0%, 100% { transform: scale(1.08) translateY(0); }
+          50% { transform: scale(1.08) translateY(-4px); }
+        }
+        .wo-bob { animation: wo-bob 1.1s ease-in-out infinite; }
+        @keyframes wo-walk-bounce {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(-5px); }
+        }
+        .wo-walk-bounce { animation: wo-walk-bounce 0.35s ease-in-out infinite; }
+        @keyframes wo-bubble-pop {
+          0% { opacity: 0; transform: translate(-50%, -100%) scale(0.6); }
+          15% { opacity: 1; transform: translate(-50%, -100%) scale(1); }
+          80% { opacity: 1; transform: translate(-50%, -100%) scale(1); }
+          100% { opacity: 0; transform: translate(-50%, -100%) scale(0.9); }
+        }
+        .wo-bubble-pop { animation: wo-bubble-pop 1.6s ease-in-out forwards; }
+      `}</style>
       <div className="mx-auto max-w-5xl">
         <div className="mb-3 flex items-center justify-between">
           <div>
@@ -183,8 +216,8 @@ export default function WebOpsOffice() {
                       <p style={{ color: "#c9d6cf" }}>{card?.value ?? "―"}</p>
                     </div>
                     <div
-                      className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full border-2 text-2xl transition-transform"
-                      style={{ borderColor: role.color, background: "#22362f", transform: isActive ? "scale(1.08)" : "scale(1)" }}
+                      className={`flex h-16 w-16 items-center justify-center overflow-hidden rounded-full border-2 text-2xl transition-transform ${isActive ? "wo-bob" : ""}`}
+                      style={{ borderColor: role.color, background: "#22362f" }}
                       aria-hidden
                     >
                       {role.avatarSrc ? (
@@ -236,6 +269,11 @@ export default function WebOpsOffice() {
             {/* Flying hand-off chips */}
             {chips.map((chip) => (
               <FlyingChipDot key={chip.id} chip={chip} />
+            ))}
+
+            {/* Speech bubbles at the moment work is handed off */}
+            {bubbles.map((bubble) => (
+              <SpeechBubbleTag key={bubble.id} bubble={bubble} />
             ))}
           </div>
 
@@ -383,11 +421,36 @@ function FlyingChipDot({ chip }: { chip: FlyingChip }) {
   }, [chip.toX, chip.toY]);
   return (
     <span
-      className="pointer-events-none absolute z-10 flex h-9 w-9 items-center justify-center overflow-hidden rounded-full text-xl shadow-lg transition-all duration-[1100ms] ease-in-out"
-      style={{ left: `${pos.x}%`, top: `${pos.y}%`, transform: "translate(-50%, -50%)", background: chip.avatarSrc ? "#22362f" : "transparent" }}
+      className="pointer-events-none absolute z-10 transition-all duration-[1100ms] ease-in-out"
+      style={{ left: `${pos.x}%`, top: `${pos.y}%`, transform: "translate(-50%, -50%)" }}
       aria-hidden
     >
-      {chip.avatarSrc ? <Image src={chip.avatarSrc} alt="" width={1254} height={1254} className="h-full w-full object-cover" /> : chip.emoji}
+      <span
+        className="wo-walk-bounce flex h-11 w-11 items-center justify-center overflow-hidden rounded-full text-xl shadow-lg"
+        style={{ background: chip.avatarSrc ? "#22362f" : "transparent", border: chip.avatarSrc ? "2px solid #e0c04a" : undefined }}
+      >
+        {chip.avatarSrc ? <Image src={chip.avatarSrc} alt="" width={1254} height={1254} className="h-full w-full object-cover" /> : chip.emoji}
+      </span>
     </span>
+  );
+}
+
+/**
+ * A short comment-bubble that pops up at the sender's desk the instant work
+ * changes hands, echoing the activity-log line for that hand-off.
+ */
+function SpeechBubbleTag({ bubble }: { bubble: SpeechBubble }) {
+  return (
+    <div
+      className="wo-bubble-pop pointer-events-none absolute z-20 max-w-[150px] rounded-xl border px-2 py-1 text-[10px] font-semibold leading-snug shadow-lg"
+      style={{ left: `${bubble.x}%`, top: `${bubble.y - 8}%`, borderColor: bubble.color, background: "#1f332c", color: "#e8e4d8" }}
+      aria-hidden
+    >
+      {bubble.text}
+      <span
+        className="absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-x-[6px] border-t-[6px] border-x-transparent"
+        style={{ borderTopColor: bubble.color }}
+      />
+    </div>
   );
 }
