@@ -47,4 +47,22 @@ describe("buildTimelineEvents", () => {
   it("scriptEndMinute falls back to the day boundary for an empty timeline", () => {
     expect(scriptEndMinute([])).toBe(DAY_END_MINUTE);
   });
+
+  it("attaches real, distinct post-caption drafts to the writing approval, one per counted post", () => {
+    const events = buildTimelineEvents({ storeName: "カフェあおば", industry: "カフェ", topic: "秋限定ラテ" });
+    const writingApproval = events.find((e) => e.id === "ev5")?.approval;
+    expect(writingApproval?.items?.length).toBeGreaterThan(0);
+    expect(writingApproval?.title).toContain(String(writingApproval?.items?.length));
+    expect(new Set(writingApproval?.items)).toHaveProperty("size", writingApproval?.items?.length);
+    for (const caption of writingApproval?.items ?? []) {
+      expect(caption).toContain("カフェあおば");
+    }
+  });
+
+  it("attaches bullet-point insights to the analytics approval, referencing the topic and counts", () => {
+    const events = buildTimelineEvents({ storeName: "カフェあおば", industry: "カフェ", topic: "秋限定ラテ" });
+    const analyticsApproval = events.find((e) => e.id === "ev19")?.approval;
+    expect(analyticsApproval?.items?.length).toBeGreaterThan(0);
+    expect(analyticsApproval?.items?.some((line) => line.includes("秋限定ラテ"))).toBe(true);
+  });
 });

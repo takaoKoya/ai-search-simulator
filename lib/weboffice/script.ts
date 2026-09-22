@@ -115,6 +115,8 @@ export interface ApprovalItem {
   role: RoleCode;
   title: string;
   body: string;
+  /** The concrete deliverables to review (post captions, analysis bullet points, ...). */
+  items?: string[];
 }
 
 export interface TimelineEvent {
@@ -171,6 +173,34 @@ function seededScore(seed: string, min: number, max: number): number {
   return Math.round(min + normalized * (max - min));
 }
 
+const CAPTION_TEMPLATES: ((topic: string) => string)[] = [
+  (t) => `${t}、今だけの限定でお届けします。`,
+  (t) => `気になっていた「${t}」、ついに登場です。`,
+  (t) => `${t}のこだわりポイントをまとめました。`,
+  (t) => `${t}を求めて、今日もぜひ足をお運びください。`,
+  (t) => `スタッフ一押しの「${t}」、試してみませんか？`,
+  (t) => `${t}、SNSでも話題になっています。`,
+];
+
+/** Generates `count` distinct post-caption drafts, deterministic from the seed. */
+function generatePostCaptions(input: WebOpsInput, count: number, seed: string): string[] {
+  const startIndex = seededScore(`${seed}|captionStart`, 0, CAPTION_TEMPLATES.length - 1);
+  return Array.from({ length: count }, (_, i) => {
+    const template = CAPTION_TEMPLATES[(startIndex + i) % CAPTION_TEMPLATES.length];
+    return `${input.storeName} | ${template(input.topic)}`;
+  });
+}
+
+/** Generates the analytics agent's bullet-point insights for the day's approval memo. */
+function generateAnalysisInsights(input: WebOpsInput, reach: number, followerDelta: number, dmCount: number): string[] {
+  return [
+    `「${input.topic}」の投稿はリーチ${reach}件と、他の投稿より反応が良好でした。`,
+    `フォロワーは+${followerDelta}人増加。保存・シェアからの流入が中心です。`,
+    `DM${dmCount}件のうち、${input.industry}ならではの質問（在庫・営業時間など）が目立ちました。`,
+    `明日は「${input.topic}」の続編として動画コンテンツを1本追加することを提案します。`,
+  ];
+}
+
 /**
  * Builds a full day's timeline, personalized from the given store/industry/
  * topic input. The narrative beats, timing, hand-offs and animations stay
@@ -184,6 +214,8 @@ export function buildTimelineEvents(input: WebOpsInput): TimelineEvent[] {
   const dmCount = seededScore(`${seed}|dm`, 5, 20);
   const reach = seededScore(`${seed}|reach`, 300, 2000);
   const followerDelta = seededScore(`${seed}|followers`, 5, 80);
+  const postCaptions = generatePostCaptions(input, postCount, seed);
+  const analysisInsights = generateAnalysisInsights(input, reach, followerDelta, dmCount);
 
   return [
     {
@@ -226,6 +258,7 @@ export function buildTimelineEvents(input: WebOpsInput): TimelineEvent[] {
         role: "writing",
         title: `投稿案${postCount}本の確認`,
         body: `「${input.topic}」をテーマにしたInstagram/Threads投稿案を${postCount}本作成しました。${input.storeName}（${input.industry}）のトーンに合わせています。内容をご確認の上、承認をお願いします（このデモでは実際には投稿されません）。`,
+        items: postCaptions,
       },
     },
     {
@@ -322,6 +355,7 @@ export function buildTimelineEvents(input: WebOpsInput): TimelineEvent[] {
         role: "analytics",
         title: "本日の分析メモ",
         body: `本日の投稿リーチ${reach}、フォロワー+${followerDelta}、DM対応${dmCount}件。反応の良かった「${input.topic}」を踏まえ、明日は動画コンテンツを1本追加することを提案します。`,
+        items: analysisInsights,
       },
     },
     {

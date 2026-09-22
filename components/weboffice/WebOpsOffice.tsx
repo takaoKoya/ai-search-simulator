@@ -423,7 +423,7 @@ export default function WebOpsOffice() {
       {approvalModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setApprovalModal(null)}>
           <div
-            className="w-full max-w-sm rounded-xl border p-4"
+            className="w-full max-w-md rounded-xl border p-4"
             style={{ borderColor: "#4a6058", background: "#1f332c" }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -446,9 +446,18 @@ export default function WebOpsOffice() {
             <h3 className="mb-2 text-[13px] font-bold" style={{ color: "#e8e4d8" }}>
               {approvalModal.title}
             </h3>
-            <p className="mb-4 text-[12px] leading-relaxed" style={{ color: "#c9d6cf" }}>
+            <p className="mb-3 text-[12px] leading-relaxed" style={{ color: "#c9d6cf" }}>
               {approvalModal.body}
             </p>
+            {approvalModal.items && approvalModal.items.length > 0 && (
+              <ul className="mb-4 max-h-52 space-y-1.5 overflow-y-auto text-[11px] leading-relaxed">
+                {approvalModal.items.map((item, i) => (
+                  <li key={i} className="rounded-lg border px-2 py-1.5" style={{ borderColor: "#4a6058", background: "#16241f", color: "#e8e4d8" }}>
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            )}
             <div className="flex justify-end gap-2">
               <button onClick={() => setApprovalModal(null)} className="rounded-lg border px-3 py-1.5 text-[11px]" style={{ borderColor: "#4a6058", color: "#c9d6cf" }}>
                 閉じる
