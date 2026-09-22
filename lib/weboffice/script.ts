@@ -18,6 +18,8 @@ export interface Role {
   emoji: string;
   /** Character illustration shown on the desk avatar and hand-off animation; falls back to `emoji` when absent. */
   avatarSrc?: string;
+  /** Alternate pose used to flip-animate a "walk" during the hand-off flight; falls back to `avatarSrc` when absent. */
+  altAvatarSrc?: string;
   color: string;
   /** Grid position as a percentage of the office floor container. */
   x: number;
@@ -28,11 +30,61 @@ export const PRESIDENT_POSITION = { x: 50, y: 92 };
 export const PRESIDENT_AVATAR_SRC = "/weboffice/characters/president.webp";
 
 export const ROLES: Role[] = [
-  { code: "research", label: "リサーチ", agentName: "リサ", emoji: "🔍", avatarSrc: "/weboffice/characters/research.webp", color: "#7fae7a", x: 16, y: 24 },
-  { code: "writing", label: "執筆", agentName: "カク", emoji: "✍️", avatarSrc: "/weboffice/characters/writing.webp", color: "#c9a25a", x: 50, y: 24 },
-  { code: "ops", label: "運用", agentName: "ラン", emoji: "📮", avatarSrc: "/weboffice/characters/ops.webp", color: "#d98a5f", x: 84, y: 24 },
-  { code: "production", label: "制作", agentName: "サク", emoji: "🎨", avatarSrc: "/weboffice/characters/production.webp", color: "#e0c04a", x: 16, y: 60 },
-  { code: "sales", label: "営業", agentName: "セイ", emoji: "💬", avatarSrc: "/weboffice/characters/sales.webp", color: "#6c9fc9", x: 50, y: 60 },
+  {
+    code: "research",
+    label: "リサーチ",
+    agentName: "リサ",
+    emoji: "🔍",
+    avatarSrc: "/weboffice/characters/research.webp",
+    altAvatarSrc: "/weboffice/characters/research-b.webp",
+    color: "#7fae7a",
+    x: 16,
+    y: 24,
+  },
+  {
+    code: "writing",
+    label: "執筆",
+    agentName: "カク",
+    emoji: "✍️",
+    avatarSrc: "/weboffice/characters/writing.webp",
+    altAvatarSrc: "/weboffice/characters/writing-b.webp",
+    color: "#c9a25a",
+    x: 50,
+    y: 24,
+  },
+  {
+    code: "ops",
+    label: "運用",
+    agentName: "ラン",
+    emoji: "📮",
+    avatarSrc: "/weboffice/characters/ops.webp",
+    altAvatarSrc: "/weboffice/characters/ops-b.webp",
+    color: "#d98a5f",
+    x: 84,
+    y: 24,
+  },
+  {
+    code: "production",
+    label: "制作",
+    agentName: "サク",
+    emoji: "🎨",
+    avatarSrc: "/weboffice/characters/production.webp",
+    altAvatarSrc: "/weboffice/characters/production-b.webp",
+    color: "#e0c04a",
+    x: 16,
+    y: 60,
+  },
+  {
+    code: "sales",
+    label: "営業",
+    agentName: "セイ",
+    emoji: "💬",
+    avatarSrc: "/weboffice/characters/sales.webp",
+    altAvatarSrc: "/weboffice/characters/sales-b.webp",
+    color: "#6c9fc9",
+    x: 50,
+    y: 60,
+  },
   { code: "analytics", label: "分析", agentName: "アナ", emoji: "📊", avatarSrc: "/weboffice/characters/analytics.webp", color: "#a988c9", x: 84, y: 60 },
 ];
 

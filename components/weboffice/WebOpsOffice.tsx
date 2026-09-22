@@ -30,6 +30,7 @@ type FlyingChip = {
   toY: number;
   emoji: string;
   avatarSrc?: string;
+  altAvatarSrc?: string;
 };
 
 type SpeechBubble = {
@@ -88,8 +89,9 @@ export default function WebOpsOffice() {
           const fromRole = event.handoff.from === "president" ? null : roleByCode(event.handoff.from);
           const emoji = fromRole ? fromRole.emoji : "✅";
           const avatarSrc = fromRole ? fromRole.avatarSrc : PRESIDENT_AVATAR_SRC;
+          const altAvatarSrc = fromRole ? fromRole.altAvatarSrc : undefined;
           const color = fromRole ? fromRole.color : "#e0c04a";
-          const chip: FlyingChip = { id: `${event.id}-chip`, fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, emoji, avatarSrc };
+          const chip: FlyingChip = { id: `${event.id}-chip`, fromX: from.x, fromY: from.y, toX: to.x, toY: to.y, emoji, avatarSrc, altAvatarSrc };
           setChips((cur) => [...cur, chip]);
           setTimeout(() => setChips((cur) => cur.filter((c) => c.id !== chip.id)), 1400);
 
@@ -415,10 +417,18 @@ export default function WebOpsOffice() {
  */
 function FlyingChipDot({ chip }: { chip: FlyingChip }) {
   const [pos, setPos] = useState({ x: chip.fromX, y: chip.fromY });
+  const [frame, setFrame] = useState(0);
   useEffect(() => {
     const id = requestAnimationFrame(() => setPos({ x: chip.toX, y: chip.toY }));
     return () => cancelAnimationFrame(id);
   }, [chip.toX, chip.toY]);
+  // Flip between the two pose frames in step with the walk-bounce for a walking illusion.
+  useEffect(() => {
+    if (!chip.altAvatarSrc) return;
+    const id = setInterval(() => setFrame((f) => (f === 0 ? 1 : 0)), 175);
+    return () => clearInterval(id);
+  }, [chip.altAvatarSrc]);
+  const frameSrc = frame === 1 && chip.altAvatarSrc ? chip.altAvatarSrc : chip.avatarSrc;
   return (
     <span
       className="pointer-events-none absolute z-10 transition-all duration-[1100ms] ease-in-out"
@@ -427,9 +437,9 @@ function FlyingChipDot({ chip }: { chip: FlyingChip }) {
     >
       <span
         className="wo-walk-bounce flex h-11 w-11 items-center justify-center overflow-hidden rounded-full text-xl shadow-lg"
-        style={{ background: chip.avatarSrc ? "#22362f" : "transparent", border: chip.avatarSrc ? "2px solid #e0c04a" : undefined }}
+        style={{ background: frameSrc ? "#22362f" : "transparent", border: frameSrc ? "2px solid #e0c04a" : undefined }}
       >
-        {chip.avatarSrc ? <Image src={chip.avatarSrc} alt="" width={1254} height={1254} className="h-full w-full object-cover" /> : chip.emoji}
+        {frameSrc ? <Image src={frameSrc} alt="" width={1254} height={1254} className="h-full w-full object-cover" /> : chip.emoji}
       </span>
     </span>
   );
