@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import LoginView from "@/components/yattoru/LoginView";
-import { HOME_ROUTE } from "@/lib/routes";
+import { POST_LOGIN_ROUTE } from "@/lib/routes";
 
 export const metadata: Metadata = {
   title: "YATTORU | ログイン",
@@ -16,7 +16,7 @@ export default async function Page() {
   } = await supabase.auth.getUser();
 
   if (user) {
-    redirect(HOME_ROUTE);
+    redirect(POST_LOGIN_ROUTE);
   }
 
   return <LoginView />;
