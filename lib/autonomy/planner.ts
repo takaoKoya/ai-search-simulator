@@ -20,6 +20,7 @@ import { getObjective } from "@/lib/server/objectives";
 import { resolveCandidateSkills } from "@/lib/autonomy/skillCandidateResolver";
 import { transitionCycle } from "@/lib/autonomy/stateTransition";
 import { getLLMProvider, type GetLLMProviderOptions, type LLMGenerateParams, type MockRespondFn, type ProviderKind } from "@/lib/ai/llmProvider";
+import { CostReservationDeniedError, reconcile as reconcileCostReservation, release as releaseCostReservation, reserve as reserveCost } from "@/lib/autonomy/costGuardrail";
 import {
   PlanProposalSchema,
   WORK_TERMINAL_STATUSES,
@@ -33,6 +34,15 @@ import {
 const RECENT_WORKS_LIMIT = 20;
 const RELEVANT_SUMMARIES_LIMIT = 5;
 const DEFAULT_NEXT_OBSERVATION_DELAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * PHASE 1 placeholder: a flat estimate for one Planner LLM call, used only
+ * to exercise the Cost Guardrail's ESTIMATE/RESERVE/RECONCILE mechanics
+ * (spec FINAL requirement §18: "Cost Guardrail must run before any Real LLM
+ * call"). Real per-token/per-model costing is a PHASE 2 concern — Mock calls
+ * never reserve anything, since they cost nothing.
+ */
+const ESTIMATED_PLANNER_LLM_COST_USD = 0.05;
 
 export interface PlanForCycleParams {
   cycleId: string;
@@ -331,15 +341,21 @@ async function writeDecisionLog(
 
 /**
  * Runs one Planning stage for an already-observed cycle. Reads company state,
- * calls the (Fail-Closed-selected) LLMProvider, validates its output against
+ * reserves cost before any REAL provider call (spec FINAL requirement §18 —
+ * Mock calls never reserve, they cost nothing), calls the
+ * (Fail-Closed-selected) LLMProvider, validates its output against
  * PlanProposalSchema, records the resulting PlanProposal, and logs the
  * decision (spec FINAL CHANGE 5: actor_type AI, so it is distinguishable from
- * a human decision). Any failure here transitions the cycle to FAILED and
- * logs a SYSTEM decision — never swallowed (spec FINAL CHANGE 7).
+ * a human decision). Any failure here transitions the cycle to FAILED (or, if
+ * caused specifically by a Cost Reservation denial, ESCALATED — per spec §9,
+ * "{allowed:false} short-circuits straight to ESCALATED, no LLM call is
+ * made") and logs a SYSTEM decision — never swallowed (spec FINAL CHANGE 7).
  */
 export async function planForCycle(supabase: SupabaseServerClient, tenantId: string, params: PlanForCycleParams): Promise<PlanForCycleResult> {
   const settings = await assertNotStopped(supabase, tenantId);
   const { input, observationId } = await buildPlannerContext(supabase, tenantId, settings, params.objectiveId, params.cycleId);
+
+  let reservationId: string | null = null;
 
   try {
     const provider = getLLMProvider(settings.autonomy_mode, {
@@ -347,8 +363,18 @@ export async function planForCycle(supabase: SupabaseServerClient, tenantId: str
       mockRespond: buildDeterministicMockRespond(input),
     });
 
+    if (provider.kind === "REAL") {
+      const reservation = await reserveCost(supabase, tenantId, { cycleId: params.cycleId, estimatedCostUsd: ESTIMATED_PLANNER_LLM_COST_USD });
+      if (!reservation.allowed) throw new CostReservationDeniedError(reservation.reason);
+      reservationId = reservation.reservationId;
+    }
+
     const generateParams = buildPlannerPrompt(input);
     const result = await provider.generateStructured<PlanProposal>(PlanProposalSchema as unknown as ZodType<PlanProposal>, generateParams);
+
+    if (reservationId) {
+      await reconcileCostReservation(supabase, tenantId, reservationId, ESTIMATED_PLANNER_LLM_COST_USD);
+    }
 
     const planProposalId = await recordPlanProposal(supabase, tenantId, {
       objectiveId: params.objectiveId,
@@ -369,9 +395,21 @@ export async function planForCycle(supabase: SupabaseServerClient, tenantId: str
 
     return { planProposalId, proposal: result.data, providerKind: result.providerKind, plannerInput: input };
   } catch (err) {
+    if (reservationId) {
+      await releaseCostReservation(supabase, tenantId, reservationId).catch(() => {});
+    }
+
     const message = err instanceof Error ? err.message : String(err);
-    await transitionCycle(supabase, tenantId, params.cycleId, "FAILED", { outcome: message });
-    await writeDecisionLog(supabase, tenantId, { cycleId: params.cycleId, objectiveId: params.objectiveId, actorType: "SYSTEM", action: "PLAN_FAILED", reasoningSummary: message, reasonCodes: ["PLANNER_ERROR"] });
+    const isCostDenial = err instanceof CostReservationDeniedError;
+    await transitionCycle(supabase, tenantId, params.cycleId, isCostDenial ? "ESCALATED" : "FAILED", { outcome: message });
+    await writeDecisionLog(supabase, tenantId, {
+      cycleId: params.cycleId,
+      objectiveId: params.objectiveId,
+      actorType: "SYSTEM",
+      action: isCostDenial ? "COST_RESERVATION_DENIED" : "PLAN_FAILED",
+      reasoningSummary: message,
+      reasonCodes: [isCostDenial ? `COST_${(err as CostReservationDeniedError).reason}` : "PLANNER_ERROR"],
+    });
     throw err;
   }
 }
