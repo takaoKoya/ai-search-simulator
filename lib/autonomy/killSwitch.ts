@@ -26,6 +26,17 @@ export interface TenantAutonomySettingsRow {
   feature_enabled: boolean;
   autonomy_mode: "OFF" | "SHADOW" | "ASSISTED" | "ACTIVE";
   emergency_stop: boolean;
+  per_execution_cost_limit_usd: number | null;
+  per_cycle_cost_limit_usd: number | null;
+  daily_cost_limit_usd: number | null;
+  max_works_per_cycle: number;
+  max_tasks_per_work: number;
+  max_cycles_per_objective_per_day: number;
+  max_replans_per_cycle: number;
+  cooldown_after_execution_minutes: number;
+  duplicate_work_window_minutes: number;
+  planner_timeout_seconds: number;
+  execution_timeout_seconds: number;
 }
 
 export async function getTenantAutonomySettings(supabase: SupabaseServerClient, tenantId: string): Promise<TenantAutonomySettingsRow | null> {
