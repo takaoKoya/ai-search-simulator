@@ -1,14 +1,24 @@
-# PHASE 1 — Implementation Plan v2 (revised per approval feedback; no code written yet)
+# PHASE 1 — Implementation Plan v3 (AUTHORIZED — implementation in progress)
 
-Status: **PLAN ONLY, v2.** The 5 base decisions from v1 are **CONFIRMED**. This revision folds in 15 additional CHANGEs required before implementation. Still no code has been written — per your instruction, this is presented again for approval and the session STOPs after this document.
+Status: **AUTHORIZED FOR IMPLEMENTATION.** All architecture/schema/service-boundary/migration-strategy decisions below, including the 7 FINAL CHANGEs, are approved. This document is now updated incrementally as implementation proceeds (per-step, not batched) rather than being a pre-implementation approval gate.
 
-## Confirmed decisions (from v1, now final)
+## Confirmed decisions (from v1, final)
 
 1. **KPI**: extend existing `kpis` additively (not a new `objective_kpis` table).
 2. **LLM Provider**: no new SDK dependency; raw `fetch` to the Anthropic Messages API, matching the Gmail/Calendar connector precedent.
 3. **Work**: new, separate `works` table — do not repurpose `initiatives`.
-4. **DENY**: Hard DENY adopted, **unconditionally override-proof, including for superuser roles** (this is stronger than v1's draft and is now load-bearing for CHANGE 3 below).
+4. **DENY**: Hard DENY adopted, **unconditionally override-proof, including for superuser roles**.
 5. **Approval**: reuse and extend the existing Approval Engine (`approval_requests`/`approval_policies`/`decideApproval()`).
+
+## FINAL CHANGEs (v3, authorized)
+
+1. **Result / Impact Layer**: Execution success ≠ KPI change. A new `ImpactAssessor` component classifies verified Results as `DIRECT_KPI_CHANGE` / `INDIRECT_CONTRIBUTION` / `NO_MEASURABLE_CHANGE` / `UNKNOWN`. `UPDATING_KPI` only happens for `DIRECT_KPI_CHANGE` and is safely skippable otherwise. State machine gains `COMMITTING_RESULT` and `ASSESSING_IMPACT` stages (§4, revised below).
+2. **Source of Truth**: `autonomy_cycles`/`works`/`workflow_runs` (DB) are the only Source of Truth for autonomy state. AI Office is a **read-only projection** of it — never a second state store. No component may infer autonomy state from UI-layer code.
+3. **State Transition Validation**: no service writes `autonomy_cycles.status`/`works.status` directly. All transitions go through one `transitionCycle()` / `transitionWork()` service (`lib/autonomy/stateTransition.ts`) that whitelists legal transitions and rejects the rest (e.g. `COMPLETED→EXECUTING`, `ESCALATED→PLANNING`, `DENIED→EXECUTING`).
+4. **Terminal States**: `COMPLETED`, `ESCALATED`, `CANCELLED`, `BLOCKED`, `FAILED`, `DENIED` are terminal for both cycles and works — `transitionCycle()`/`transitionWork()` refuse any transition *out of* a terminal state; resuming means a new cycle or an explicit Retry/Resume operation, never an implicit reopen.
+5. **Human Intervention Trace**: every human Approve/Reject/Pause/Resume/Cancel/Override writes a `decision_logs` row with `actor` (user id, not "AI"), `action`, `reason`, `timestamp`, `cycle_id` — added as required (not optional) columns on `decision_logs`.
+6. **Planner Confidence**: `plan_proposals.confidence` is observation/analytics metadata only. `AuthorityEngine.evaluate()` never reads `confidence` as an input — confirmed by construction (the function signature does not accept it).
+7. **No Silent Failure**: every stage (Planner/Provider/Skill resolution/Assignee resolution/Authority/Cost reservation/Execution/Verification/Impact assessment/KPI update/Supervisor) failure is caught, written to `decision_logs`+`agent_events`, and transitions the cycle/work via `transitionCycle()`/`transitionWork()` to one of `RETRY`/`WAIT`/`BLOCKED`/`ESCALATED`/`FAILED` — never swallowed.
 
 ---
 
