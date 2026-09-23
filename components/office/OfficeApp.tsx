@@ -153,6 +153,7 @@ export default function OfficeApp({
     if (key === "leads") return setLeadsOpen(true);
     if (key === "approvals") return setInboxOpen(true);
     if (key === "projects") return projectsSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (key === "autonomy") return router.push("/office/autonomy");
     setToast("この機能は Coming Soon です");
   }
 
@@ -198,7 +199,7 @@ export default function OfficeApp({
 
       {/* Desktop / tablet layout */}
       <div className="relative z-10 hidden gap-4 p-4 lg:grid lg:h-[calc(100vh-64px)] lg:grid-cols-[72px_1fr_336px] lg:grid-rows-[1fr_72px]">
-        <LeftNav activeKey="office" pendingApprovalCount={pendingCount} onNavigate={handleNavigate} />
+        <LeftNav activeKey="office" pendingApprovalCount={pendingCount} onNavigate={handleNavigate} showAutonomyCockpit={state.autonomyEnabled} />
 
         <main
           className="overflow-y-auto rounded-xl border p-4"

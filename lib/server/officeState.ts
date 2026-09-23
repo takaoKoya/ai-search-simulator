@@ -96,6 +96,12 @@ export async function getOfficeState(ctx: TenantContext) {
     supabase.from("proposals").select("id, opportunity_id, title").eq("tenant_id", tenantId),
   ]);
 
+  // AI Company OS Autonomy Runtime (PHASE 1): whether the Minimum Pilot
+  // Cockpit nav entry should even be offered. `feature_enabled` defaults
+  // false for every pre-PHASE-1 tenant, so this is a no-op for them.
+  const { data: autonomySettingsRow } = await supabase.from("tenant_autonomy_settings").select("feature_enabled").eq("tenant_id", tenantId).maybeSingle();
+  const autonomyEnabled = autonomySettingsRow?.feature_enabled === true;
+
   for (const res of [
     departmentsRes,
     agentsRes,
@@ -322,6 +328,7 @@ export async function getOfficeState(ctx: TenantContext) {
       confirmedValue: (o.confirmed_value as number | null) ?? null,
     })),
     ceoSummary: buildCeoSummary(pendingApprovals, decidedApprovals),
+    autonomyEnabled,
   };
 }
 

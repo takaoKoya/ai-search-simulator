@@ -131,6 +131,7 @@ const EVENT_TYPE_META: Record<string, EventTypeMeta> = {
   "verification.passed": { label: "検証合格", category: "autonomy", severity: "info", icon: "🔎" },
   "verification.failed": { label: "検証不合格", category: "autonomy", severity: "warning", icon: "🔎" },
   "supervisor.replan_requested": { label: "Supervisorが再計画を要求", category: "autonomy", severity: "warning", icon: "🔁" },
+  "autonomy.emergency_stop_toggled": { label: "Emergency Stopを切替", category: "autonomy", severity: "warning", icon: "🛑" },
 };
 
 const FALLBACK: EventTypeMeta = { label: "イベント", category: "ops", severity: "info", icon: "•" };

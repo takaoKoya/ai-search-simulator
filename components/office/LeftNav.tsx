@@ -11,6 +11,7 @@ import {
   Network,
   Settings,
   Sparkles,
+  Bot,
   type LucideIcon,
 } from "lucide-react";
 
@@ -26,10 +27,13 @@ export default function LeftNav({
   activeKey,
   pendingApprovalCount,
   onNavigate,
+  showAutonomyCockpit = false,
 }: {
   activeKey: string;
   pendingApprovalCount: number;
   onNavigate: (key: string) => void;
+  /** AI Company OS Autonomy Runtime (PHASE 1): gated on tenant_autonomy_settings.feature_enabled — false (the default) for every pre-PHASE-1 tenant, so this entry is simply absent for them, not just disabled. */
+  showAutonomyCockpit?: boolean;
 }) {
   const items: NavItem[] = [
     { key: "office", label: "Office", icon: LayoutGrid },
@@ -39,6 +43,7 @@ export default function LeftNav({
     { key: "projects", label: "Projects", icon: Briefcase },
     { key: "tasks", label: "Tasks", icon: ListChecks, comingSoon: true },
     { key: "approvals", label: "Approvals", icon: Inbox, badge: pendingApprovalCount },
+    ...(showAutonomyCockpit ? [{ key: "autonomy", label: "Autonomy Cockpit", icon: Bot }] : []),
     { key: "reports", label: "Reports", icon: FileBarChart, comingSoon: true },
     { key: "organization", label: "Organization", icon: Network, comingSoon: true },
     { key: "settings", label: "Settings", icon: Settings, comingSoon: true },
