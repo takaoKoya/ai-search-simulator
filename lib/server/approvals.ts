@@ -4,6 +4,7 @@ import { ForbiddenError, NotFoundError, ValidationError } from "@/lib/server/err
 import type { TenantContext } from "@/lib/server/tenant";
 import type { ApprovalStep } from "@/lib/server/approvalPolicy";
 import { computeCooldownUntil } from "@/lib/server/upsell";
+import { transitionWork } from "@/lib/autonomy/stateTransition";
 
 import { getEmailConnector } from "@/lib/sales/emailConnector";
 
@@ -58,23 +59,71 @@ interface ApprovalRow {
   status: string;
   steps?: ApprovalStep[] | null;
   current_step?: number | null;
+  policy_code?: string | null;
+  cycle_id?: string | null;
 }
 
 /**
- * Fine-grained step authorization (spec §51-53). Owner/ceo/admin can always
- * decide/override any approval at any step — identical to every pre-Phase-5
- * approval type, which never had a `steps` chain at all (empty steps here
- * falls back to "superuser only", exactly matching the route-level
+ * Whether ANY policy named by this approval's (possibly comma-joined,
+ * spec §51-53) `policy_code` is a Hard DENY policy (AI Company OS PHASE 1
+ * FINAL CHANGE 3). AuthorityEngine itself never creates an approval_requests
+ * row for a hard_deny match (there is nothing to ask a human about) — this
+ * exists purely as defense in depth for any approval type, present or
+ * future, whose policy is later flagged hard_deny.
+ */
+async function isHardDenyPolicyMatch(ctx: TenantContext, policyCode: string | null | undefined): Promise<boolean> {
+  if (!policyCode) return false;
+  const codes = policyCode
+    .split(",")
+    .map((c) => c.trim())
+    .filter(Boolean);
+  if (codes.length === 0) return false;
+
+  const { data, error } = await ctx.supabase.from("approval_policies").select("hard_deny").eq("tenant_id", ctx.tenantId).in("code", codes);
+  if (error) throw error;
+  return (data ?? []).some((row) => row.hard_deny === true);
+}
+
+/**
+ * Fine-grained step authorization (spec §51-53), extended by AI Company OS
+ * PHASE 1 FINAL CHANGE 3 (Hard DENY): a hard_deny policy match on "approve"
+ * throws unconditionally, evaluated BEFORE the superuser check below — the
+ * owner/ceo/admin bypass is never even consulted for it, not merely
+ * overridden by an added condition. There is no code path, including a
+ * superuser API call, that can turn a hard-denied decision into an approval.
+ *
+ * Below that: owner/ceo/admin can always decide/override any (non-hard-deny)
+ * approval at any step — identical to every pre-Phase-5 approval type, which
+ * never had a `steps` chain at all (empty steps here falls back to
+ * "superuser only", exactly matching the route-level
  * `assertRole(ctx, APPROVER_ROLES)` gate that guarded every approval type
  * before this phase). A non-superuser role (e.g. "manager") may only decide
  * when it is explicitly named at the chain's current step.
  */
-function authorizeDecision(ctx: TenantContext, steps: ApprovalStep[], currentStep: number): void {
+function authorizeDecision(ctx: TenantContext, steps: ApprovalStep[], currentStep: number, action: ApprovalAction, hardDeny: boolean): void {
+  if (hardDeny && action === "approve") {
+    throw new ForbiddenError("This approval is Hard DENY per policy — no role, including owner/ceo/admin, may approve it.");
+  }
   if (SUPERUSER_ROLES.includes(ctx.role)) return;
   const step = steps[currentStep];
   if (!step || step.role !== ctx.role) {
     throw new ForbiddenError(`Role "${ctx.role}" cannot decide this approval${step ? ` (requires "${step.role}")` : ""}`);
   }
+}
+
+/** Every human Approve/Reject on an autonomy Work must be logged (spec FINAL CHANGE 5) — distinguishable from AuthorityEngine's own SYSTEM-actor AUTHORIZE decision on the same work. Only ever called for `type==='work_creation'`, whose approval_requests row always carries a cycle_id (set by createAndAuthorizeWork). */
+async function writeWorkHumanInterventionLog(ctx: TenantContext, params: { cycleId: string; workId: string; action: "APPROVE" | "REJECT"; reason?: string }): Promise<void> {
+  const { error } = await ctx.supabase.from("decision_logs").insert({
+    tenant_id: ctx.tenantId,
+    cycle_id: params.cycleId,
+    work_id: params.workId,
+    stage: "HUMAN_INTERVENTION",
+    actor_type: "HUMAN",
+    actor_id: ctx.userId,
+    action: params.action,
+    reasoning_summary: params.reason ?? null,
+  });
+  if (error) throw error;
 }
 
 /**
@@ -99,7 +148,7 @@ export async function decideApproval(
 
   const { data: approval, error } = await supabase
     .from("approval_requests")
-    .select("id, tenant_id, type, subject_type, subject_id, title, status, steps, current_step")
+    .select("id, tenant_id, type, subject_type, subject_id, title, status, steps, current_step, policy_code, cycle_id")
     .eq("id", approvalId)
     .eq("tenant_id", tenantId)
     .single();
@@ -114,7 +163,8 @@ export async function decideApproval(
 
   const steps = approvalRow.steps ?? [];
   const currentStep = approvalRow.current_step ?? 0;
-  authorizeDecision(ctx, steps, currentStep);
+  const hardDeny = await isHardDenyPolicyMatch(ctx, approvalRow.policy_code);
+  authorizeDecision(ctx, steps, currentStep, action, hardDeny);
 
   if (action === "approve" && editNote && editNote.trim().length > 0) {
     await supabase.from("decision_memories").insert({
@@ -318,6 +368,17 @@ async function applyNonApproval(ctx: TenantContext, approval: ApprovalRow, actio
     }
     return;
   }
+  if (approval.type === "work_creation" && action === "reject") {
+    // AI Company OS PHASE 1: a human rejecting an AuthorityEngine-routed
+    // Work is exactly as terminal as AuthorityEngine's own DENY — see
+    // lib/autonomy/authorityEngine.ts's STATUS_BY_DECISION.
+    await transitionWork(ctx.supabase, ctx.tenantId, approval.subject_id, "DENIED");
+    if (approval.cycle_id) {
+      await writeWorkHumanInterventionLog(ctx, { cycleId: approval.cycle_id, workId: approval.subject_id, action: "REJECT", reason });
+    }
+    return;
+  }
+
   // "delivery" rejection: leave the project active for rework; no automated action beyond the decision_memory.
 }
 
@@ -573,6 +634,14 @@ async function applyApproval(ctx: TenantContext, approval: ApprovalRow): Promise
     });
 
     return { opportunityId: oppRow.id, converted: true };
+  }
+
+  if (approval.type === "work_creation") {
+    await transitionWork(ctx.supabase, ctx.tenantId, approval.subject_id, "APPROVED");
+    if (approval.cycle_id) {
+      await writeWorkHumanInterventionLog(ctx, { cycleId: approval.cycle_id, workId: approval.subject_id, action: "APPROVE" });
+    }
+    return { workId: approval.subject_id, authorized: true };
   }
 
   throw new ValidationError(`Unknown approval type: ${approval.type}`);

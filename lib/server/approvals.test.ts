@@ -273,4 +273,97 @@ describe("decideApproval", () => {
       expect(steps[1].status).toBe("REJECTED");
     });
   });
+
+  describe("Hard DENY (AI Company OS PHASE 1 FINAL CHANGE 3)", () => {
+    function seedHardDenyPolicy(fake: FakeSupabase, tenantId: string) {
+      fake.table("approval_policies").push({ tenant_id: tenantId, code: "work_creation", conditions: {}, steps: [{ role: "manager" }], is_active: true, hard_deny: true });
+    }
+
+    it("blocks even an owner/ceo/admin from approving a hard_deny-matched approval — the superuser bypass is never consulted", async () => {
+      const fake = new FakeSupabase();
+      const tenantId = "t1";
+      seedHardDenyPolicy(fake, tenantId);
+      fake.table("works").push({ id: "work-1", tenant_id: tenantId, status: "AUTHORITY_PENDING", authority_decision: "APPROVAL", authority_policy_code: "work_creation" });
+      fake.table("approval_requests").push({
+        id: "appr-1",
+        tenant_id: tenantId,
+        type: "work_creation",
+        subject_type: "work",
+        subject_id: "work-1",
+        title: "Work: risky action",
+        status: "pending",
+        steps: [{ role: "manager", status: "PENDING" }],
+        current_step: 0,
+        policy_code: "work_creation",
+      });
+
+      for (const role of ["owner", "ceo", "admin"] as const) {
+        const ctx = makeCtx(fake, tenantId, `user-${role}`, role);
+        await expect(decideApproval(ctx, "appr-1", "approve")).rejects.toThrow(/Hard DENY/);
+      }
+
+      const row = fake.table("approval_requests").find((a) => a.id === "appr-1")!;
+      expect(row.status).toBe("pending");
+      const work = fake.table("works").find((w) => w.id === "work-1")!;
+      expect(work.status).toBe("AUTHORITY_PENDING");
+    });
+
+    it("still allows rejecting a hard_deny-matched approval (reject only confirms the deny, it never overrides it)", async () => {
+      const fake = new FakeSupabase();
+      const tenantId = "t1";
+      seedHardDenyPolicy(fake, tenantId);
+      fake.table("works").push({ id: "work-1", tenant_id: tenantId, status: "AUTHORITY_PENDING" });
+      fake.table("approval_requests").push({
+        id: "appr-1",
+        tenant_id: tenantId,
+        type: "work_creation",
+        subject_type: "work",
+        subject_id: "work-1",
+        title: "Work: risky action",
+        status: "pending",
+        steps: [{ role: "manager", status: "PENDING" }],
+        current_step: 0,
+        policy_code: "work_creation",
+        cycle_id: "cyc-1",
+      });
+
+      const ownerCtx = makeCtx(fake, tenantId, "user-owner", "owner");
+      const result = await decideApproval(ownerCtx, "appr-1", "reject", "Policy denies this");
+      expect(result.status).toBe("rejected");
+
+      const work = fake.table("works").find((w) => w.id === "work-1")!;
+      expect(work.status).toBe("DENIED");
+    });
+
+    it("normal (non-hard-deny) work_creation approvals still work: a manager approving moves the Work to APPROVED", async () => {
+      const fake = new FakeSupabase();
+      const tenantId = "t1";
+      fake.table("approval_policies").push({ tenant_id: tenantId, code: "work_creation", conditions: {}, steps: [{ role: "manager" }], is_active: true, hard_deny: false });
+      fake.table("works").push({ id: "work-1", tenant_id: tenantId, status: "AUTHORITY_PENDING" });
+      fake.table("approval_requests").push({
+        id: "appr-1",
+        tenant_id: tenantId,
+        type: "work_creation",
+        subject_type: "work",
+        subject_id: "work-1",
+        title: "Work: normal action",
+        status: "pending",
+        steps: [{ role: "manager", status: "PENDING" }],
+        current_step: 0,
+        policy_code: "work_creation",
+        cycle_id: "cyc-1",
+      });
+
+      const managerCtx = makeCtx(fake, tenantId, "user-manager", "manager");
+      const result = await decideApproval(managerCtx, "appr-1", "approve");
+      expect(result.status).toBe("approved");
+
+      const work = fake.table("works").find((w) => w.id === "work-1")!;
+      expect(work.status).toBe("APPROVED");
+
+      const humanLog = fake.table("decision_logs").find((row) => row.stage === "HUMAN_INTERVENTION");
+      expect(humanLog?.actor_type).toBe("HUMAN");
+      expect(humanLog?.action).toBe("APPROVE");
+    });
+  });
 });

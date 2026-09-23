@@ -19,6 +19,8 @@ export interface ApprovalPolicyRow {
   conditions: Record<string, unknown>;
   steps: ApprovalStep[];
   is_active: boolean;
+  /** Hard DENY tier (AI Company OS PHASE 1 FINAL CHANGE 3) — see lib/autonomy/authorityEngine.ts and lib/server/approvals.ts's authorizeDecision(). Unconditional: no role, including a superuser, may approve a matched hard_deny policy. Optional/defaults falsy so pre-PHASE-1 call sites that don't select it are unaffected. */
+  hard_deny?: boolean;
 }
 
 export interface PolicyMatchContext {
@@ -85,7 +87,7 @@ export function computeApprovalSteps(
 }
 
 export async function loadApprovalPolicies(supabase: SupabaseServerClient, tenantId: string): Promise<ApprovalPolicyRow[]> {
-  const { data, error } = await supabase.from("approval_policies").select("code, conditions, steps, is_active").eq("tenant_id", tenantId).eq("is_active", true);
+  const { data, error } = await supabase.from("approval_policies").select("code, conditions, steps, is_active, hard_deny").eq("tenant_id", tenantId).eq("is_active", true);
   if (error) throw error;
   return (data ?? []) as ApprovalPolicyRow[];
 }
