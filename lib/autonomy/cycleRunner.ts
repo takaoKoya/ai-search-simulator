@@ -101,7 +101,7 @@ export async function runObjectiveCycle(supabase: SupabaseServerClient, tenantId
   const { cycleId, observation: obs } = observation;
 
   if (!obs.requires_planning) {
-    await transitionCycle(supabase, tenantId, cycleId, "COMPLETED", { outcome: "No planning required" });
+    await transitionCycle(supabase, tenantId, cycleId, "COMPLETED", { outcome: "No planning required", endedAt: now?.toISOString() });
     await writeDecisionLog(supabase, tenantId, {
       cycleId,
       objectiveId,
@@ -143,6 +143,6 @@ export async function runObjectiveCycle(supabase: SupabaseServerClient, tenantId
     return { skipped: false, cycleId };
   }
 
-  const supervisorResult = await reviewCycle(supabase, tenantId, { cycleId, objectiveId });
+  const supervisorResult = await reviewCycle(supabase, tenantId, { cycleId, objectiveId, now });
   return { skipped: false, cycleId, supervisorDecision: supervisorResult.decision };
 }

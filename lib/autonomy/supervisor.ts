@@ -123,6 +123,8 @@ export async function getImpactClassificationsForCycle(supabase: SupabaseServerC
 export interface ReviewCycleParams {
   cycleId: string;
   objectiveId: string;
+  /** Defaults to the real wall clock (transitionCycle's own default) — only ever overridden by tests/backfills that also control ObjectiveObserver's `now`, so `ended_at` stays consistent with the rest of a simulated cycle timeline. */
+  now?: Date;
 }
 
 export interface ReviewCycleResult {
@@ -159,10 +161,11 @@ export async function reviewCycle(supabase: SupabaseServerClient, tenantId: stri
     verificationVerdicts,
   });
 
+  const endedAt = params.now?.toISOString();
   if (decision === "COMPLETE" || decision === "NEXT_CYCLE") {
-    await transitionCycle(supabase, tenantId, params.cycleId, "COMPLETED", { outcome: reasoning });
+    await transitionCycle(supabase, tenantId, params.cycleId, "COMPLETED", { outcome: reasoning, endedAt });
   } else if (decision === "ESCALATE") {
-    await transitionCycle(supabase, tenantId, params.cycleId, "ESCALATED", { outcome: reasoning });
+    await transitionCycle(supabase, tenantId, params.cycleId, "ESCALATED", { outcome: reasoning, endedAt });
   }
   // WAIT/BLOCK: no cycle transition — see module doc comment.
 
