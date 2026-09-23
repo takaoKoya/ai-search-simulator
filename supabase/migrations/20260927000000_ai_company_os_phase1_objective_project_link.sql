@@ -1,0 +1,14 @@
+-- AI Company OS PHASE 1: optional Objective -> Project link
+--
+-- The 2-Cycle Vertical Slice (00_IMPLEMENTATION_PLAN.md §13) is explicitly
+-- "Objective (KPI gap on a real project)" — the Execution Adapter
+-- (lib/autonomy/executionAdapter.ts) needs to know which existing `projects`
+-- row to pass into the unchanged measurement_graph/renewal_graph (both
+-- require `projectId`, and renewal_graph additionally needs the client's
+-- company name, resolved the same way the existing growth-loop-check cron
+-- route already does: `projects.client_id -> clients.name`).
+--
+-- Nullable and additive: a tenant-level Objective with no linked project
+-- (the common case for a non-project-scoped Company Objective) is
+-- unaffected, and no existing query reads this column.
+alter table public.objectives add column project_id uuid references public.projects (id);

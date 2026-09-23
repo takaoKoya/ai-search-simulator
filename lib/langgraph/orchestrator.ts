@@ -51,6 +51,8 @@ interface RunBusinessGraphParams {
   subjectType: string;
   subjectId: string;
   input: Record<string, unknown>;
+  /** Set only by the AI Company OS Autonomy Runtime's Execution Adapter (lib/autonomy/executionAdapter.ts) — links this run back to its autonomy_cycles row. Every pre-PHASE-1 (human-triggered) call omits it, leaving workflow_runs.cycle_id null, exactly as before. */
+  cycleId?: string;
 }
 
 /**
@@ -65,7 +67,7 @@ interface RunBusinessGraphParams {
  * in-process graph suspension.
  */
 export async function runBusinessGraph(params: RunBusinessGraphParams): Promise<Record<string, unknown>> {
-  const { supabase, tenantId, graphName, subjectType, subjectId, input } = params;
+  const { supabase, tenantId, graphName, subjectType, subjectId, input, cycleId } = params;
 
   // thread_id is generated here (not left to the column default) so the
   // graph can be invoked with a known thread_id in the same request.
@@ -78,6 +80,7 @@ export async function runBusinessGraph(params: RunBusinessGraphParams): Promise<
       subject_type: subjectType,
       subject_id: subjectId,
       status: "running",
+      cycle_id: cycleId ?? null,
       thread_id: threadIdForInsert,
     })
     .select("id, thread_id")

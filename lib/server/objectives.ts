@@ -18,6 +18,8 @@ export interface ObjectiveRow {
   owner_type: string;
   owner_id: string | null;
   created_by: string | null;
+  /** Optional link to an existing `projects` row — see lib/autonomy/executionAdapter.ts, which needs it to invoke project-scoped Skills (measurement_graph/renewal_graph). Most Company Objectives are not project-scoped, so this is usually null. */
+  project_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -34,6 +36,7 @@ export async function createObjective(
     deadline?: string;
     priority?: "low" | "medium" | "high" | "critical";
     createdBy?: string;
+    projectId?: string;
   }
 ): Promise<ObjectiveRow> {
   const { data, error } = await supabase
@@ -49,6 +52,7 @@ export async function createObjective(
       priority: params.priority ?? "medium",
       status: "DRAFT",
       created_by: params.createdBy ?? null,
+      project_id: params.projectId ?? null,
     })
     .select("*")
     .single();
