@@ -32,3 +32,7 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json(result, { status: result.ran ? 200 : 202 });
 }
+
+// Vercel Cron Jobs invoke via GET (with the same Authorization: Bearer $CRON_SECRET
+// header isCronRequestAuthorized checks) — POST remains for any manual/internal trigger.
+export const GET = POST;
