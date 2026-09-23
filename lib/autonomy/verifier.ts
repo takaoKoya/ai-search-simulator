@@ -118,5 +118,14 @@ export async function verifyExecution(supabase: SupabaseServerClient, tenantId: 
     reasonCodes: [`VERIFY_${verdict}`],
   });
 
+  if (verdict === "PASS" || verdict === "FAIL") {
+    await supabase.from("agent_events").insert({
+      tenant_id: tenantId,
+      event_type: verdict === "PASS" ? "verification.passed" : "verification.failed",
+      message: verdict === "PASS" ? "検証合格" : "検証不合格",
+      payload: { objectiveId: params.objectiveId, cycleId: params.cycleId, workId: params.workId },
+    });
+  }
+
   return { verificationId: data.id as string, verdict, checks };
 }

@@ -121,6 +121,9 @@ describe("planForCycle", () => {
     const logged = fake.table("decision_logs").find((row) => row.stage === "PLAN");
     expect(logged?.actor_type).toBe("AI");
     expect(logged?.action).toBe("CREATE_WORK");
+
+    const event = fake.table("agent_events").find((row) => row.event_type === "plan.created");
+    expect((event?.payload as { decision: string } | undefined)?.decision).toBe("CREATE_WORK");
   });
 
   it("proposes WAIT when an active work already exists for the objective, instead of duplicating it", async () => {

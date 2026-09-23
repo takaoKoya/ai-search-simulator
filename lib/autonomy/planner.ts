@@ -376,6 +376,12 @@ export async function planForCycle(supabase: SupabaseServerClient, tenantId: str
       reasoningSummary: result.data.reasoningSummary,
       reasonCodes: result.data.reasonCodes,
     });
+    await supabase.from("agent_events").insert({
+      tenant_id: tenantId,
+      event_type: "plan.created",
+      message: `Plan Proposal作成: ${result.data.decision}`,
+      payload: { objectiveId: params.objectiveId, cycleId: params.cycleId, planProposalId, decision: result.data.decision, providerKind: result.providerKind },
+    });
 
     return { planProposalId, proposal: result.data, providerKind: result.providerKind, plannerInput: input };
   } catch (err) {

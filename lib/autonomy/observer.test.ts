@@ -71,6 +71,28 @@ describe("observeObjective", () => {
     expect(fake.table("objectives")[0].status).toBe("AT_RISK");
   });
 
+  it("emits an objective.at_risk agent_events row when the objective transitions ACTIVE -> AT_RISK", async () => {
+    const fake = new FakeSupabase();
+    seedTenant(fake);
+    seedObjective(fake);
+    fake.table("kpis").push({
+      id: "kpi-1",
+      tenant_id: TENANT,
+      objective_id: "obj-1",
+      current_value: 0.01,
+      target_value: 0.05,
+      direction: "HIGHER_IS_BETTER",
+      warning_threshold: 0.03,
+      critical_threshold: 0.005,
+      created_at: "2026-01-01T00:00:00Z",
+    });
+
+    await observeObjective(fake as unknown as never, TENANT, "obj-1", NOW);
+
+    const event = fake.table("agent_events").find((e) => e.event_type === "objective.at_risk");
+    expect(event?.tenant_id).toBe(TENANT);
+  });
+
   it("skips (no new cycle) inside the cooldown window after a just-ended cycle", async () => {
     const fake = new FakeSupabase();
     seedTenant(fake, { cooldown_after_execution_minutes: 60 });

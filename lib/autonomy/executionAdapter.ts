@@ -139,6 +139,12 @@ export async function executeWork(supabase: SupabaseServerClient, tenantId: stri
   resolveAssignee(); // PHASE 1: always SYSTEM_ASSIGNEE (lib/autonomy/assigneeResolver.ts) — not yet used for routing.
 
   await transitionWork(supabase, tenantId, work.id, "EXECUTING");
+  await supabase.from("agent_events").insert({
+    tenant_id: tenantId,
+    event_type: "execution.started",
+    message: `自律実行開始: ${skill.executor_ref}`,
+    payload: { objectiveId: work.objective_id, cycleId: work.cycle_id, workId: work.id, executorRef: skill.executor_ref },
+  });
 
   const timeoutMs = (settings?.execution_timeout_seconds ?? DEFAULT_EXECUTION_TIMEOUT_SECONDS) * 1000;
 
@@ -163,12 +169,39 @@ export async function executeWork(supabase: SupabaseServerClient, tenantId: stri
       reasoningSummary: `runBusinessGraph(${skill.executor_ref}) finished with status=${graphStatus ?? "unknown"}`,
       reasonCodes: [`EXECUTION_${outcome}`],
     });
+    if (outcome === "COMPLETED") {
+      await supabase.from("agent_events").insert({
+        tenant_id: tenantId,
+        event_type: "execution.completed",
+        message: `自律実行完了: ${skill.executor_ref}`,
+        payload: { objectiveId: work.objective_id, cycleId: work.cycle_id, workId: work.id },
+      });
+      await supabase.from("agent_events").insert({
+        tenant_id: tenantId,
+        event_type: "work.completed",
+        message: "Work完了",
+        payload: { objectiveId: work.objective_id, cycleId: work.cycle_id, workId: work.id },
+      });
+    } else if (outcome === "FAILED") {
+      await supabase.from("agent_events").insert({
+        tenant_id: tenantId,
+        event_type: "execution.failed",
+        message: `自律実行失敗: ${skill.executor_ref}`,
+        payload: { objectiveId: work.objective_id, cycleId: work.cycle_id, workId: work.id },
+      });
+    }
 
     return { workId: work.id, outcome, workflowRunFinalState: finalState };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await transitionWork(supabase, tenantId, work.id, "FAILED");
     await writeDecisionLog(supabase, tenantId, { cycleId: work.cycle_id, objectiveId: work.objective_id, workId: work.id, stage: "EXECUTE", actorType: "SYSTEM", action: "FAILED", reasoningSummary: message, reasonCodes: ["EXECUTION_ERROR"] });
+    await supabase.from("agent_events").insert({
+      tenant_id: tenantId,
+      event_type: "execution.failed",
+      message: `自律実行失敗: ${message}`,
+      payload: { objectiveId: work.objective_id, cycleId: work.cycle_id, workId: work.id },
+    });
     throw err;
   }
 }

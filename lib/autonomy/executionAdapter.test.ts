@@ -115,6 +115,9 @@ describe("executeWork", () => {
     );
     const log = fake.table("decision_logs").find((r) => r.stage === "EXECUTE");
     expect(log?.action).toBe("COMPLETED");
+    expect(fake.table("agent_events").find((r) => r.event_type === "execution.started")).toBeDefined();
+    expect(fake.table("agent_events").find((r) => r.event_type === "execution.completed")).toBeDefined();
+    expect(fake.table("agent_events").find((r) => r.event_type === "work.completed")).toBeDefined();
   });
 
   it("resolves the company name from projects.clients for renewal_graph", async () => {

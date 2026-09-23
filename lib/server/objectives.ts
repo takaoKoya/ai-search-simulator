@@ -57,7 +57,16 @@ export async function createObjective(
     .select("*")
     .single();
   if (error || !data) throw error ?? new Error("Failed to create objective");
-  return data as ObjectiveRow;
+  const objective = data as ObjectiveRow;
+
+  await supabase.from("agent_events").insert({
+    tenant_id: tenantId,
+    event_type: "objective.created",
+    message: `Objective作成: ${objective.title}`,
+    payload: { objectiveId: objective.id },
+  });
+
+  return objective;
 }
 
 export async function listObjectives(supabase: SupabaseServerClient, tenantId: string, params?: { status?: ObjectiveStatus }): Promise<ObjectiveRow[]> {

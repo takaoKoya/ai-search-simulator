@@ -14,6 +14,15 @@ describe("objectives service", () => {
     expect(obj.tenant_id).toBe(TENANT);
   });
 
+  it("emits an objective.created agent_events row", async () => {
+    const fake = new FakeSupabase();
+    const obj = await createObjective(fake as unknown as never, TENANT, { title: "CVR改善" });
+
+    const event = fake.table("agent_events").find((e) => e.event_type === "objective.created");
+    expect(event?.tenant_id).toBe(TENANT);
+    expect((event?.payload as { objectiveId: string }).objectiveId).toBe(obj.id);
+  });
+
   it("lists only the acting tenant's objectives, optionally filtered by status", async () => {
     const fake = new FakeSupabase();
     fake.table("objectives").push({ id: "o1", tenant_id: TENANT, title: "A", status: "ACTIVE", created_at: "2026-01-01" });

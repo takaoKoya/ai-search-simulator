@@ -64,6 +64,7 @@ describe("assessImpact", () => {
     expect(fake.table("kpis")[0].current_value).toBe(0.06);
     const updateKpiLog = fake.table("decision_logs").find((r) => r.stage === "UPDATE_KPI");
     expect(updateKpiLog?.action).toBe("KPI_ALREADY_UPDATED_BY_VERIFIED_SKILL");
+    expect(fake.table("agent_events").find((r) => r.event_type === "kpi.autonomy_updated")).toBeDefined();
   });
 
   it("records INDIRECT_CONTRIBUTION for a PASSed renewal_graph, with no kpi_id", async () => {

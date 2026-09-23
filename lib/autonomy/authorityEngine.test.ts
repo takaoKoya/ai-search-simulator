@@ -125,6 +125,8 @@ describe("createAndAuthorizeWork", () => {
     expect(fake.table("approval_requests")).toHaveLength(0);
     const log = fake.table("decision_logs").find((r) => r.stage === "AUTHORIZE");
     expect(log?.action).toBe("AUTO");
+    const event = fake.table("agent_events").find((r) => r.event_type === "work.created");
+    expect((event?.payload as { authorityDecision: string } | undefined)?.authorityDecision).toBe("AUTO");
   });
 
   it("APPROVAL: a skill naming a policy with a step chain goes to AUTHORITY_PENDING and creates a work_creation approval_requests row", async () => {

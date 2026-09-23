@@ -136,6 +136,12 @@ export async function assessImpact(supabase: SupabaseServerClient, tenantId: str
       action: "KPI_ALREADY_UPDATED_BY_VERIFIED_SKILL",
       reasoningSummary: "measurement_graph itself wrote kpis.current_value as part of its own (unchanged) execution; no separate write is made here.",
     });
+    await supabase.from("agent_events").insert({
+      tenant_id: tenantId,
+      event_type: "kpi.autonomy_updated",
+      message: "KPIが自律実行により更新されました",
+      payload: { objectiveId: params.objectiveId, workId: params.workId, kpiId: kpi?.id ?? null },
+    });
   }
 
   return { impactAssessmentId: data.id as string, classification, rationale };

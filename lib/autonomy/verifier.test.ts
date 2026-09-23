@@ -37,6 +37,7 @@ describe("verifyExecution", () => {
     expect(fake.table("verifications")[0].verdict).toBe("PASS");
     const log = fake.table("decision_logs").find((r) => r.stage === "VERIFY");
     expect(log?.action).toBe("PASS");
+    expect(fake.table("agent_events").find((r) => r.event_type === "verification.passed")).toBeDefined();
   });
 
   it("FAIL: measurement_graph with no CURRENT kpi_snapshot recorded at all — never trusts the graph's own self-report", async () => {
@@ -52,6 +53,7 @@ describe("verifyExecution", () => {
 
     expect(result.verdict).toBe("FAIL");
     expect(result.checks.find((c) => c.name === "CURRENT_KPI_SNAPSHOT_EXISTS")?.passed).toBe(false);
+    expect(fake.table("agent_events").find((r) => r.event_type === "verification.failed")).toBeDefined();
   });
 
   it("FAIL: measurement_graph with a snapshot row but a null value", async () => {

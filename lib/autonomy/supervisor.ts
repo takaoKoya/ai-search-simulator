@@ -176,5 +176,14 @@ export async function reviewCycle(supabase: SupabaseServerClient, tenantId: stri
     reasonCodes: [`SUPERVISOR_${decision}`],
   });
 
+  if (decision === "WAIT" && planDecision === "REPLAN") {
+    await supabase.from("agent_events").insert({
+      tenant_id: tenantId,
+      event_type: "supervisor.replan_requested",
+      message: "Supervisorが再計画を要求",
+      payload: { objectiveId: params.objectiveId, cycleId: params.cycleId },
+    });
+  }
+
   return { decision, reasoning };
 }

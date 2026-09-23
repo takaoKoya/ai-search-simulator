@@ -1,4 +1,4 @@
-export type EventCategory = "sales" | "ops" | "approval" | "contract" | "delivery" | "growth";
+export type EventCategory = "sales" | "ops" | "approval" | "contract" | "delivery" | "growth" | "autonomy";
 export type EventSeverity = "info" | "warning" | "error";
 
 export const FILTER_TABS = [
@@ -113,6 +113,24 @@ const EVENT_TYPE_META: Record<string, EventTypeMeta> = {
   "upsell.critic_rejected": { label: "アップセルCritic却下", category: "growth", severity: "info", icon: "🛑" },
   "upsell.converted": { label: "アップセル→商談化", category: "growth", severity: "info", icon: "🔁" },
   "initiative.created": { label: "継続提案作成", category: "ops", severity: "info", icon: "＋" },
+
+  // AI Company OS Autonomy Runtime (PHASE 1) — lib/autonomy/**. Distinct from
+  // the pre-existing "growth" events above: these specifically trace an
+  // *autonomous* decision/action, never a human-triggered one.
+  "autonomy.cron_fired": { label: "Autonomy Cron発火", category: "autonomy", severity: "info", icon: "⏱" },
+  "autonomy.cycle_started": { label: "Autonomy Cycle開始", category: "autonomy", severity: "info", icon: "▶" },
+  "objective.created": { label: "Objective作成", category: "autonomy", severity: "info", icon: "🎯" },
+  "objective.at_risk": { label: "Objectiveがリスク状態に", category: "autonomy", severity: "warning", icon: "⚠" },
+  "kpi.autonomy_updated": { label: "KPIが自律実行により更新", category: "autonomy", severity: "info", icon: "📈" },
+  "plan.created": { label: "Plan Proposal作成", category: "autonomy", severity: "info", icon: "🧭" },
+  "work.created": { label: "Work作成", category: "autonomy", severity: "info", icon: "🛠" },
+  "work.completed": { label: "Work完了", category: "autonomy", severity: "info", icon: "✅" },
+  "execution.started": { label: "自律実行開始", category: "autonomy", severity: "info", icon: "▶" },
+  "execution.completed": { label: "自律実行完了", category: "autonomy", severity: "info", icon: "✓" },
+  "execution.failed": { label: "自律実行失敗", category: "autonomy", severity: "error", icon: "✕" },
+  "verification.passed": { label: "検証合格", category: "autonomy", severity: "info", icon: "🔎" },
+  "verification.failed": { label: "検証不合格", category: "autonomy", severity: "warning", icon: "🔎" },
+  "supervisor.replan_requested": { label: "Supervisorが再計画を要求", category: "autonomy", severity: "warning", icon: "🔁" },
 };
 
 const FALLBACK: EventTypeMeta = { label: "イベント", category: "ops", severity: "info", icon: "•" };

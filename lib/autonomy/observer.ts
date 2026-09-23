@@ -190,6 +190,12 @@ export async function observeObjective(
 
       if (objective.status === "ACTIVE" && (status === "OFF_TARGET" || status === "CRITICAL")) {
         await updateObjectiveStatus(supabase, tenantId, objectiveId, "AT_RISK" as ObjectiveStatus);
+        await supabase.from("agent_events").insert({
+          tenant_id: tenantId,
+          event_type: "objective.at_risk",
+          message: `Objective「${objective.title}」がリスク状態に (KPI status: ${status})`,
+          payload: { objectiveId, cycleId, kpiStatus: status },
+        });
       } else if (objective.status === "AT_RISK" && status === "ON_TARGET") {
         await updateObjectiveStatus(supabase, tenantId, objectiveId, "ACTIVE" as ObjectiveStatus);
       }

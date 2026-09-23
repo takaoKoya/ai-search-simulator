@@ -158,6 +158,19 @@ describe("reviewCycle", () => {
     expect(fake.table("autonomy_cycles")[0].status).toBe("RUNNING");
   });
 
+  it("emits a supervisor.replan_requested agent_events row on a REPLAN-driven WAIT", async () => {
+    const fake = new FakeSupabase();
+    seedTenant(fake, { max_replans_per_cycle: 2 });
+    seedObjective(fake);
+    seedCycle(fake);
+    fake.table("plan_proposals").push({ id: "pp-1", tenant_id: TENANT, cycle_id: "cyc-1", decision: "REPLAN", created_at: "2026-02-01T00:00:00Z" });
+
+    const result = await reviewCycle(fake as unknown as never, TENANT, { cycleId: "cyc-1", objectiveId: "obj-1" });
+
+    expect(result.decision).toBe("WAIT");
+    expect(fake.table("agent_events").find((r) => r.event_type === "supervisor.replan_requested")).toBeDefined();
+  });
+
   it("uses the most recent plan_proposals row when more than one exists for the cycle", async () => {
     const fake = new FakeSupabase();
     seedTenant(fake);

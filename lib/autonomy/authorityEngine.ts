@@ -216,6 +216,12 @@ export async function createAndAuthorizeWork(supabase: SupabaseServerClient, ten
       reasoningSummary: `Skill "${skill.name}" (risk=${skill.risk_level}) evaluated against policy ${evaluation.policyCode ?? "(none)"}`,
       reasonCodes: [`AUTHORITY_${evaluation.decision}`],
     });
+    await supabase.from("agent_events").insert({
+      tenant_id: tenantId,
+      event_type: "work.created",
+      message: `Work作成: ${params.proposedWork.title} (${evaluation.decision})`,
+      payload: { objectiveId: params.objectiveId, cycleId: params.cycleId, workId, authorityDecision: evaluation.decision },
+    });
 
     return { workId, status: nextStatus, authorityDecision: evaluation.decision, authorityPolicyCode: evaluation.policyCode, duplicate: false };
   } catch (err) {
