@@ -351,3 +351,61 @@ GA4/GSC/Ads/Semrush/Clarity/GBPの実コネクタ、Measurement/Report/Renewal/
 Upsell Center・Executive Dashboard・Account Roomの専用画面、MRR/ARR/NRR/GRR・
 Client Profitability（コスト/課金システムが未実装のため）は本フェーズ対象外。
 詳細は`README.md`の「Growth Loop」節を参照。
+
+## AI Company Autonomy Runtime — 3 migrations
+(`20260925000000_ai_company_os_phase1_autonomy_core.sql` /
+`20260926000000_ai_company_os_phase1_cost_ledger.sql` /
+`20260927000000_ai_company_os_phase1_objective_project_link.sql`)
+
+### 新規テーブル（13）
+
+`objectives`（会社レベルGoal、既存の`goals`とは別概念）・`autonomy_cycles`
+（ループのトレースルート、`parent_cycle_id`でサイクル連鎖）・
+`objective_observations`・`skill_definitions`（既存18 LangGraphを
+"Skill"として登録するレジストリ、`executor_ref`はDB制約でなくアプリ層の
+`GraphName`型で検証）・`plan_proposals`・`works`（新規独立テーブル、
+`initiatives`の転用ではない。`unique(tenant_id, idempotency_key)`と
+`unique(tenant_id, observation_id, skill_definition_id)`の2本のユニーク制約が
+冪等性の実体）・`verifications`・`impact_assessments`・`cost_reservations`・
+`execution_costs`・`decision_logs`（追記専用の人間可読な意思決定監査ログ、
+`agent_events`とは別物）・`tenant_autonomy_settings`（テナントごと1行、
+Feature Flag・Autonomy Mode・Kill Switch・7種のLoop Safety上限）・
+`cost_ledgers`（テナント×日ごと1行、日次コスト上限の楽観的並行制御の実体）。
+
+### 既存テーブルへの追加列
+
+`kpis`（+`objective_id`、`project_id`を`nullable`化）・`tasks`
+（+`work_id`/`cycle_id`、両方`nullable`）・`workflow_runs`/`agent_events`/
+`approval_requests`（+`cycle_id`、`nullable`）・`approval_policies`
+（+`hard_deny boolean not null default false`）・`objectives`
+（+`project_id`、3本目のマイグレーションで追加。`measurement_graph`/
+`renewal_graph`実行にプロジェクト紐付けが必須と判明したため）。
+
+### RLS
+
+新規12テーブル全てで`relrowsecurity = true`。既存の`is_tenant_member()`/
+`has_tenant_role()`をそのまま再利用し、3パターンに分類：フルライフサイクル
+（`objectives`/`skill_definitions`: member CRUD + admin delete）・
+システム管理（`autonomy_cycles`/`plan_proposals`/`works`/
+`cost_reservations`: member CRUDのみ、deleteなし）・追記専用
+（`objective_observations`/`verifications`/`impact_assessments`/
+`execution_costs`/`decision_logs`: member select/insertのみ）。
+`tenant_autonomy_settings`/`cost_ledgers`はselectが全member、
+insert/updateは`owner`/`ceo`/`admin`のみ。
+
+### 実機検証済みの内容
+
+本フェーズは開発中に実機Postgresへ一度も接続できなかったため、
+上記3マイグレーションは静的検証（括弧・クォート対応の目視確認）のみで、
+**実Postgresへの適用・RLSの実機検証は未実施**。本番投入前に運用者が
+`docs/ai-company-os-phase1/11_OPERATIONS.md`の手順で適用・検証すること。
+アプリケーション層のテナント分離は`lib/autonomy/tenantIsolation.test.ts`
+（`FakeSupabase`ベース、9ケース）で別途担保。
+
+### 既知の制約
+
+新規登録した18 Skillのうち実際にExecution Adapterから呼び出されるのは
+`measurement_graph`/`renewal_graph`の2つのみ（他16件はレジストリ収録のみ）。
+Kill Switch/`execution_timeout_seconds`は実行中の`runBusinessGraph()`呼び出し
+自体を強制キャンセルできない（新規ワークの開始を止めるのみ）。詳細は
+`docs/ai-company-os-phase1/`（`01`〜`12`）を参照。

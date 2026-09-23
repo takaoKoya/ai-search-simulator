@@ -810,3 +810,53 @@ final step, same as a real Human Delivery would). All 285 tests pass; `npx tsc
   tenants each getting their own `renewal`/`upsell` agents and
   `monthly_report`/`upsell_opportunity` approval policies via the tenant-provisioning
   trigger) — not a real browser session.
+
+### AI Company Autonomy Runtime — "PHASE 1" of the Autonomy roadmap
+
+A closed Objective → Observe → Plan → Authorize → Execute → Verify → Assess Impact →
+Supervise loop, built on top of everything above without modifying any of the 18
+existing LangGraph pipelines, the orchestrator's dispatch mechanism, the checkpointer,
+or RLS/tenancy. Fully documented in **`docs/ai-company-os-phase1/`** — start at
+`01_ARCHITECTURE.md` for the map, `00_IMPLEMENTATION_PLAN.md` for the authorized
+design rationale, and `12_PHASE1_COMPLETION_REPORT.md` for what shipped vs. what's
+deferred.
+
+#### Setup
+
+Disabled by default for every tenant (`tenant_autonomy_settings.feature_enabled =
+false`) — zero behavior change unless explicitly enabled. Requires the three
+migrations under `supabase/migrations/2026092{5,6,7}*_ai_company_os_phase1_*.sql`
+applied (additive-only; **not yet run against any live Postgres** — see
+`docs/ai-company-os-phase1/11_OPERATIONS.md`), `CRON_SECRET` (shared with the
+existing cron routes), and `ANTHROPIC_API_KEY` only if a tenant is promoted to
+`ASSISTED`/`ACTIVE` mode (Fail-Closed otherwise — see `.env.example`).
+
+#### Architecture
+
+Seven stage modules under `lib/autonomy/` (`observer`, `planner`, `authorityEngine`,
+`executionAdapter`, `verifier`, `impactAssessor`, `supervisor`) composed by
+`cycleRunner.ts::runObjectiveCycle()`, driven hourly by
+`app/api/cron/objective-observer/route.ts` (wired into `vercel.json`). A minimal
+Pilot Cockpit at `/office/autonomy` (read-only projection of the same DB rows, plus
+the Emergency Stop Kill Switch toggle) is the only new UI surface. See
+`docs/ai-company-os-phase1/01_ARCHITECTURE.md` for the full pipeline diagram and file
+map, and the sibling docs for each subsystem.
+
+#### Tests
+
+458/458 tests passing (grown from the 291 baseline before this work began), across
+70 files, including a required 2-Cycle Closed Loop integration test proving two
+genuinely different Planner decisions across consecutive cycles
+(`lib/autonomy/closedLoop.integration.test.ts`) and a dedicated tenant-isolation +
+feature-disabled-zero-side-effects security suite
+(`lib/autonomy/tenantIsolation.test.ts`, `lib/autonomy/featureDisabledRegression.test.ts`).
+`npx tsc --noEmit`, `npx eslint .`, and `npm run build` are clean. See
+`docs/ai-company-os-phase1/10_SECURITY.md` and `12_PHASE1_COMPLETION_REPORT.md`.
+
+#### Known limitations
+
+See `docs/ai-company-os-phase1/12_PHASE1_COMPLETION_REPORT.md §12.4` for the full,
+stated list (no live Postgres available during development; in-flight execution
+cannot be forcibly cancelled by the Kill Switch; only 2 of the 18 registered Skills
+are dispatchable in this phase; cost estimation is a flat placeholder pending real
+per-token costing).
