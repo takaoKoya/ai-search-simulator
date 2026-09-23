@@ -19,6 +19,7 @@ import { getObjective, updateObjectiveStatus, type ObjectiveRow } from "@/lib/se
 import { transitionCycle } from "@/lib/autonomy/stateTransition";
 import { classifyKpiStatus, computeTargetGap, type KpiDirection, type KpiStatus } from "@/lib/server/measurement";
 import type { ObjectiveStatus } from "@/lib/autonomy/types";
+import { writeDecisionLog } from "@/lib/autonomy/decisionLog";
 
 export type ObserverSkipReason = "COOLDOWN" | "MAX_CYCLES_REACHED";
 
@@ -96,24 +97,6 @@ async function countCyclesToday(supabase: SupabaseServerClient, tenantId: string
     .not("started_at", "is", null);
   if (error) throw error;
   return (data ?? []).filter((row) => (row.started_at as string) >= startOfDay).length;
-}
-
-async function writeDecisionLog(
-  supabase: SupabaseServerClient,
-  tenantId: string,
-  params: { cycleId: string; objectiveId: string; stage: string; action: string; reasoningSummary?: string; reasonCodes?: string[] }
-): Promise<void> {
-  const { error } = await supabase.from("decision_logs").insert({
-    tenant_id: tenantId,
-    cycle_id: params.cycleId,
-    objective_id: params.objectiveId,
-    stage: params.stage,
-    actor_type: "SYSTEM",
-    action: params.action,
-    reasoning_summary: params.reasoningSummary ?? null,
-    reason_codes: params.reasonCodes ?? [],
-  });
-  if (error) throw error;
 }
 
 export async function observeObjective(
@@ -219,6 +202,7 @@ export async function observeObjective(
       cycleId,
       objectiveId,
       stage: "OBSERVE",
+      actorType: "SYSTEM",
       action: "OBSERVATION_RECORDED",
       reasoningSummary: `progress=${observationInsert.progress} gap=${observationInsert.gap} requiresPlanning=${observationInsert.requires_planning}`,
       reasonCodes: observationInsert.reason_codes as string[],
@@ -228,7 +212,7 @@ export async function observeObjective(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await transitionCycle(supabase, tenantId, cycleId, "FAILED", { outcome: message });
-    await writeDecisionLog(supabase, tenantId, { cycleId, objectiveId, stage: "OBSERVE", action: "OBSERVE_FAILED", reasoningSummary: message, reasonCodes: ["OBSERVER_ERROR"] });
+    await writeDecisionLog(supabase, tenantId, { cycleId, objectiveId, stage: "OBSERVE", actorType: "SYSTEM", action: "OBSERVE_FAILED", reasoningSummary: message, reasonCodes: ["OBSERVER_ERROR"] });
     throw err;
   }
 }

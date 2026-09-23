@@ -15,6 +15,7 @@
 
 import type { SupabaseServerClient } from "@/lib/server/tenant";
 import type { ImpactClassification, VerificationVerdict } from "@/lib/autonomy/types";
+import { writeDecisionLog } from "@/lib/autonomy/decisionLog";
 
 interface KpiSnapshotPoint {
   value: number | null;
@@ -92,25 +93,6 @@ export interface AssessImpactResult {
   rationale: string;
 }
 
-async function writeDecisionLog(
-  supabase: SupabaseServerClient,
-  tenantId: string,
-  params: { cycleId: string; objectiveId: string; workId: string; stage: "ASSESS_IMPACT" | "UPDATE_KPI"; action: string; reasoningSummary?: string; reasonCodes?: string[] }
-): Promise<void> {
-  const { error } = await supabase.from("decision_logs").insert({
-    tenant_id: tenantId,
-    cycle_id: params.cycleId,
-    objective_id: params.objectiveId,
-    work_id: params.workId,
-    stage: params.stage,
-    actor_type: "SYSTEM",
-    action: params.action,
-    reasoning_summary: params.reasoningSummary ?? null,
-    reason_codes: params.reasonCodes ?? [],
-  });
-  if (error) throw error;
-}
-
 export async function assessImpact(supabase: SupabaseServerClient, tenantId: string, params: AssessImpactParams): Promise<AssessImpactResult> {
   const kpi = params.verdict === "PASS" && params.skillExecutorRef === "measurement_graph" ? await fetchKpiForObjective(supabase, tenantId, params.objectiveId) : null;
   const recentKpiSnapshots = kpi ? await fetchRecentCurrentSnapshots(supabase, tenantId, kpi.id) : [];
@@ -133,7 +115,16 @@ export async function assessImpact(supabase: SupabaseServerClient, tenantId: str
     .single();
   if (error || !data) throw error ?? new Error("Failed to create impact_assessments row");
 
-  await writeDecisionLog(supabase, tenantId, { cycleId: params.cycleId, objectiveId: params.objectiveId, workId: params.workId, stage: "ASSESS_IMPACT", action: classification, reasoningSummary: rationale, reasonCodes: [`IMPACT_${classification}`] });
+  await writeDecisionLog(supabase, tenantId, {
+    cycleId: params.cycleId,
+    objectiveId: params.objectiveId,
+    workId: params.workId,
+    stage: "ASSESS_IMPACT",
+    actorType: "SYSTEM",
+    action: classification,
+    reasoningSummary: rationale,
+    reasonCodes: [`IMPACT_${classification}`],
+  });
 
   if (classification === "DIRECT_KPI_CHANGE") {
     await writeDecisionLog(supabase, tenantId, {
@@ -141,6 +132,7 @@ export async function assessImpact(supabase: SupabaseServerClient, tenantId: str
       objectiveId: params.objectiveId,
       workId: params.workId,
       stage: "UPDATE_KPI",
+      actorType: "SYSTEM",
       action: "KPI_ALREADY_UPDATED_BY_VERIFIED_SKILL",
       reasoningSummary: "measurement_graph itself wrote kpis.current_value as part of its own (unchanged) execution; no separate write is made here.",
     });

@@ -13,6 +13,7 @@
 
 import type { SupabaseServerClient } from "@/lib/server/tenant";
 import type { VerificationVerdict } from "@/lib/autonomy/types";
+import { writeDecisionLog } from "@/lib/autonomy/decisionLog";
 
 export interface VerificationCheck {
   name: string;
@@ -77,25 +78,6 @@ export interface VerifyExecutionResult {
   checks: VerificationCheck[];
 }
 
-async function writeDecisionLog(
-  supabase: SupabaseServerClient,
-  tenantId: string,
-  params: { cycleId: string; objectiveId: string; workId: string; action: string; reasoningSummary?: string; reasonCodes?: string[] }
-): Promise<void> {
-  const { error } = await supabase.from("decision_logs").insert({
-    tenant_id: tenantId,
-    cycle_id: params.cycleId,
-    objective_id: params.objectiveId,
-    work_id: params.workId,
-    stage: "VERIFY",
-    actor_type: "SYSTEM",
-    action: params.action,
-    reasoning_summary: params.reasoningSummary ?? null,
-    reason_codes: params.reasonCodes ?? [],
-  });
-  if (error) throw error;
-}
-
 export async function verifyExecution(supabase: SupabaseServerClient, tenantId: string, params: VerifyExecutionParams): Promise<VerifyExecutionResult> {
   let checks: VerificationCheck[];
   // Overrides deriveVerdict's PASS/FAIL for the two "we don't know how to
@@ -129,6 +111,8 @@ export async function verifyExecution(supabase: SupabaseServerClient, tenantId: 
     cycleId: params.cycleId,
     objectiveId: params.objectiveId,
     workId: params.workId,
+    stage: "VERIFY",
+    actorType: "SYSTEM",
     action: verdict,
     reasoningSummary: checks.map((c) => `${c.name}=${c.passed ? "PASS" : "FAIL"}`).join(", "),
     reasonCodes: [`VERIFY_${verdict}`],

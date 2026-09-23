@@ -18,6 +18,7 @@ import { assertNotStopped } from "@/lib/autonomy/killSwitch";
 import { transitionCycle, transitionWork } from "@/lib/autonomy/stateTransition";
 import { loadApprovalPolicies, selectApprovalPolicy, type ApprovalPolicyRow } from "@/lib/server/approvalPolicy";
 import type { AuthorityDecision, ProposedWork, WorkStatus } from "@/lib/autonomy/types";
+import { writeDecisionLog } from "@/lib/autonomy/decisionLog";
 
 interface SkillDefinitionRow {
   id: string;
@@ -121,25 +122,6 @@ async function findExistingWorkByIdempotencyKey(supabase: SupabaseServerClient, 
   return data as { id: string; status: WorkStatus; authority_decision: AuthorityDecision | null; authority_policy_code: string | null } | null;
 }
 
-async function writeDecisionLog(
-  supabase: SupabaseServerClient,
-  tenantId: string,
-  params: { cycleId: string; objectiveId: string; workId: string | null; action: string; reasoningSummary?: string; reasonCodes?: string[] }
-): Promise<void> {
-  const { error } = await supabase.from("decision_logs").insert({
-    tenant_id: tenantId,
-    cycle_id: params.cycleId,
-    objective_id: params.objectiveId,
-    work_id: params.workId,
-    stage: "AUTHORIZE",
-    actor_type: "SYSTEM",
-    action: params.action,
-    reasoning_summary: params.reasoningSummary ?? null,
-    reason_codes: params.reasonCodes ?? [],
-  });
-  if (error) throw error;
-}
-
 /**
  * Creates one Work row from a CREATE_WORK PlanProposal's proposedWork and
  * immediately authority-evaluates it in the same flow (spec §8/migration
@@ -228,6 +210,8 @@ export async function createAndAuthorizeWork(supabase: SupabaseServerClient, ten
       cycleId: params.cycleId,
       objectiveId: params.objectiveId,
       workId,
+      stage: "AUTHORIZE",
+      actorType: "SYSTEM",
       action: evaluation.decision,
       reasoningSummary: `Skill "${skill.name}" (risk=${skill.risk_level}) evaluated against policy ${evaluation.policyCode ?? "(none)"}`,
       reasonCodes: [`AUTHORITY_${evaluation.decision}`],
@@ -237,7 +221,7 @@ export async function createAndAuthorizeWork(supabase: SupabaseServerClient, ten
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await transitionCycle(supabase, tenantId, params.cycleId, "FAILED", { outcome: message });
-    await writeDecisionLog(supabase, tenantId, { cycleId: params.cycleId, objectiveId: params.objectiveId, workId: null, action: "AUTHORIZE_FAILED", reasoningSummary: message, reasonCodes: ["AUTHORITY_ENGINE_ERROR"] });
+    await writeDecisionLog(supabase, tenantId, { cycleId: params.cycleId, objectiveId: params.objectiveId, workId: null, stage: "AUTHORIZE", actorType: "SYSTEM", action: "AUTHORIZE_FAILED", reasoningSummary: message, reasonCodes: ["AUTHORITY_ENGINE_ERROR"] });
     throw err;
   }
 }

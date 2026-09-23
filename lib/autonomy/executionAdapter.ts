@@ -26,6 +26,7 @@ import { getObjective } from "@/lib/server/objectives";
 import { resolveAssignee } from "@/lib/autonomy/assigneeResolver";
 import { runBusinessGraph, type GraphName } from "@/lib/langgraph/orchestrator";
 import type { WorkStatus } from "@/lib/autonomy/types";
+import { writeDecisionLog } from "@/lib/autonomy/decisionLog";
 
 const DEFAULT_EXECUTION_TIMEOUT_SECONDS = 300;
 
@@ -102,25 +103,6 @@ export interface ExecutionResult {
   workflowRunFinalState?: Record<string, unknown>;
 }
 
-async function writeDecisionLog(
-  supabase: SupabaseServerClient,
-  tenantId: string,
-  params: { cycleId: string; objectiveId: string; workId: string; action: string; reasoningSummary?: string; reasonCodes?: string[] }
-): Promise<void> {
-  const { error } = await supabase.from("decision_logs").insert({
-    tenant_id: tenantId,
-    cycle_id: params.cycleId,
-    objective_id: params.objectiveId,
-    work_id: params.workId,
-    stage: "EXECUTE",
-    actor_type: "SYSTEM",
-    action: params.action,
-    reasoning_summary: params.reasoningSummary ?? null,
-    reason_codes: params.reasonCodes ?? [],
-  });
-  if (error) throw error;
-}
-
 export async function executeWork(supabase: SupabaseServerClient, tenantId: string, params: { workId: string }): Promise<ExecutionResult> {
   await assertNotStopped(supabase, tenantId);
 
@@ -144,6 +126,8 @@ export async function executeWork(supabase: SupabaseServerClient, tenantId: stri
       cycleId: work.cycle_id,
       objectiveId: work.objective_id,
       workId: work.id,
+      stage: "EXECUTE",
+      actorType: "SYSTEM",
       action: "SHADOW_MODE_SKIPPED",
       reasoningSummary: "Autonomy mode is SHADOW: recorded only, no execution.",
     });
@@ -173,6 +157,8 @@ export async function executeWork(supabase: SupabaseServerClient, tenantId: stri
       cycleId: work.cycle_id,
       objectiveId: work.objective_id,
       workId: work.id,
+      stage: "EXECUTE",
+      actorType: "SYSTEM",
       action: outcome,
       reasoningSummary: `runBusinessGraph(${skill.executor_ref}) finished with status=${graphStatus ?? "unknown"}`,
       reasonCodes: [`EXECUTION_${outcome}`],
@@ -182,7 +168,7 @@ export async function executeWork(supabase: SupabaseServerClient, tenantId: stri
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await transitionWork(supabase, tenantId, work.id, "FAILED");
-    await writeDecisionLog(supabase, tenantId, { cycleId: work.cycle_id, objectiveId: work.objective_id, workId: work.id, action: "FAILED", reasoningSummary: message, reasonCodes: ["EXECUTION_ERROR"] });
+    await writeDecisionLog(supabase, tenantId, { cycleId: work.cycle_id, objectiveId: work.objective_id, workId: work.id, stage: "EXECUTE", actorType: "SYSTEM", action: "FAILED", reasoningSummary: message, reasonCodes: ["EXECUTION_ERROR"] });
     throw err;
   }
 }

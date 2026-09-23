@@ -21,6 +21,7 @@ import { resolveCandidateSkills } from "@/lib/autonomy/skillCandidateResolver";
 import { transitionCycle } from "@/lib/autonomy/stateTransition";
 import { getLLMProvider, type GetLLMProviderOptions, type LLMGenerateParams, type MockRespondFn, type ProviderKind } from "@/lib/ai/llmProvider";
 import { CostReservationDeniedError, reconcile as reconcileCostReservation, release as releaseCostReservation, reserve as reserveCost } from "@/lib/autonomy/costGuardrail";
+import { writeDecisionLog } from "@/lib/autonomy/decisionLog";
 import {
   PlanProposalSchema,
   WORK_TERMINAL_STATUSES,
@@ -321,24 +322,6 @@ async function recordPlanProposal(
   return data.id as string;
 }
 
-async function writeDecisionLog(
-  supabase: SupabaseServerClient,
-  tenantId: string,
-  params: { cycleId: string; objectiveId: string; actorType: "SYSTEM" | "AI"; action: string; reasoningSummary?: string; reasonCodes?: string[] }
-): Promise<void> {
-  const { error } = await supabase.from("decision_logs").insert({
-    tenant_id: tenantId,
-    cycle_id: params.cycleId,
-    objective_id: params.objectiveId,
-    stage: "PLAN",
-    actor_type: params.actorType,
-    action: params.action,
-    reasoning_summary: params.reasoningSummary ?? null,
-    reason_codes: params.reasonCodes ?? [],
-  });
-  if (error) throw error;
-}
-
 /**
  * Runs one Planning stage for an already-observed cycle. Reads company state,
  * reserves cost before any REAL provider call (spec FINAL requirement §18 —
@@ -387,6 +370,7 @@ export async function planForCycle(supabase: SupabaseServerClient, tenantId: str
     await writeDecisionLog(supabase, tenantId, {
       cycleId: params.cycleId,
       objectiveId: params.objectiveId,
+      stage: "PLAN",
       actorType: "AI",
       action: result.data.decision,
       reasoningSummary: result.data.reasoningSummary,
@@ -405,6 +389,7 @@ export async function planForCycle(supabase: SupabaseServerClient, tenantId: str
     await writeDecisionLog(supabase, tenantId, {
       cycleId: params.cycleId,
       objectiveId: params.objectiveId,
+      stage: "PLAN",
       actorType: "SYSTEM",
       action: isCostDenial ? "COST_RESERVATION_DENIED" : "PLAN_FAILED",
       reasoningSummary: message,

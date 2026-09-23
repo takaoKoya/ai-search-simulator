@@ -5,6 +5,7 @@ import type { TenantContext } from "@/lib/server/tenant";
 import type { ApprovalStep } from "@/lib/server/approvalPolicy";
 import { computeCooldownUntil } from "@/lib/server/upsell";
 import { transitionWork } from "@/lib/autonomy/stateTransition";
+import { writeDecisionLog } from "@/lib/autonomy/decisionLog";
 
 import { getEmailConnector } from "@/lib/sales/emailConnector";
 
@@ -113,17 +114,15 @@ function authorizeDecision(ctx: TenantContext, steps: ApprovalStep[], currentSte
 
 /** Every human Approve/Reject on an autonomy Work must be logged (spec FINAL CHANGE 5) — distinguishable from AuthorityEngine's own SYSTEM-actor AUTHORIZE decision on the same work. Only ever called for `type==='work_creation'`, whose approval_requests row always carries a cycle_id (set by createAndAuthorizeWork). */
 async function writeWorkHumanInterventionLog(ctx: TenantContext, params: { cycleId: string; workId: string; action: "APPROVE" | "REJECT"; reason?: string }): Promise<void> {
-  const { error } = await ctx.supabase.from("decision_logs").insert({
-    tenant_id: ctx.tenantId,
-    cycle_id: params.cycleId,
-    work_id: params.workId,
+  await writeDecisionLog(ctx.supabase, ctx.tenantId, {
+    cycleId: params.cycleId,
+    workId: params.workId,
     stage: "HUMAN_INTERVENTION",
-    actor_type: "HUMAN",
-    actor_id: ctx.userId,
+    actorType: "HUMAN",
+    actorId: ctx.userId,
     action: params.action,
-    reasoning_summary: params.reason ?? null,
+    reasoningSummary: params.reason ?? null,
   });
-  if (error) throw error;
 }
 
 /**
