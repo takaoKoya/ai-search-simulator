@@ -35,8 +35,9 @@ export type VerificationVerdict = "PASS" | "FAIL" | "RETRY" | "ESCALATE";
 
 export type ImpactClassification = "DIRECT_KPI_CHANGE" | "INDIRECT_CONTRIBUTION" | "NO_MEASURABLE_CHANGE" | "UNKNOWN";
 
-/** REAL = a live LLM call. MOCK = the deterministic stand-in, allowed only in TEST/DEV/SHADOW. SIMULATED = TemplateProvider's own output, surfaced for context alongside Planner output in the same UI/logs. */
-export type ProviderKind = "REAL" | "MOCK" | "SIMULATED";
+// ProviderKind's canonical home is lib/ai/llmProvider.ts (dependency direction:
+// lib/autonomy -> lib/ai, matching the existing lib/langgraph -> lib/ai direction).
+export type { ProviderKind } from "@/lib/ai/llmProvider";
 
 export type DecisionLogStage =
   | "OBSERVE"
