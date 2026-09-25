@@ -11,3 +11,86 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
+
+/*
+ * AI Office design tokens. Scoped to `.ai-office` so they never leak into
+ * the simulator (`/`) or YATTORU (`/home`, `/task/today`) screens, which
+ * keep the light theme defined above untouched. Dark theme is the standard
+ * for the Office per the product brief (BtoB SaaS 60% / Game UI 40%).
+ */
+.ai-office {
+  --office-bg-primary: #070b14; /* Dark Navy */
+  --office-bg-secondary: #0b1220;
+  --office-surface: #111827cc; /* Dark Slate, translucent over the grid */
+  --office-surface-hover: #16213380;
+  --office-border: #ffffff1a; /* Blue Gray, low contrast */
+  --office-grid-line: #ffffff0a;
+  --office-text-primary: #f1f5f9;
+  --office-text-secondary: #94a3b8;
+  --office-text-muted: #64748b;
+
+  --office-ai-accent: #38bdf8; /* Blue: AI-originated activity */
+  --office-human-accent: #34d399; /* Green: human/CEO activity */
+
+  --office-status-idle: #64748b;
+  --office-status-queued: #94a3b8;
+  --office-status-thinking: #38bdf8;
+  --office-status-working: #34d399; /* Muted Green */
+  --office-status-tool-calling: #22d3ee;
+  --office-status-waiting-external: #fbbf24; /* Amber */
+  --office-status-waiting-human: #facc15; /* Yellow */
+  --office-status-reviewing: #a78bfa; /* Purple */
+  --office-status-handoff: #38bdf8;
+  --office-status-completed: #34d399;
+  --office-status-warning: #fb923c; /* Orange */
+  --office-status-failed: #f87171; /* Red */
+}
+
+/* Subtle, purposeful per-status motion. Kept small on purpose (#9: 過剰な
+ * アニメーションは禁止) — a status change should be noticeable within a
+ * glance, not distracting during a long look. */
+@keyframes office-bell-ring {
+  0%, 92%, 100% { transform: rotate(0deg); }
+  93% { transform: rotate(-12deg); }
+  95% { transform: rotate(10deg); }
+  97% { transform: rotate(-6deg); }
+  99% { transform: rotate(3deg); }
+}
+@keyframes office-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1.5px); }
+}
+@keyframes office-scan {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+@keyframes office-pop-in {
+  0% { transform: scale(0.6); opacity: 0; }
+  60% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes office-handoff-flow {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+.ai-office .status-anim-thinking { animation: office-scan 1.6s ease-in-out infinite; }
+.ai-office .status-anim-working { animation: office-scan 1.4s ease-in-out infinite; }
+.ai-office .status-anim-tool_calling { animation: office-bob 0.9s ease-in-out infinite; }
+.ai-office .status-anim-waiting_human,
+.ai-office .status-anim-waiting_external { animation: office-bell-ring 3.2s ease-in-out infinite; transform-origin: 50% 0%; }
+.ai-office .status-anim-reviewing { animation: office-bob 1.8s ease-in-out infinite; }
+.ai-office .status-anim-completed { animation: office-pop-in 0.4s ease-out; }
+.ai-office .status-anim-failed { animation: office-scan 1s ease-in-out infinite; }
+.ai-office .status-anim-handoff {
+  background: linear-gradient(90deg, var(--office-ai-accent), transparent, var(--office-ai-accent));
+  background-size: 200% 100%;
+  animation: office-handoff-flow 1.2s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-office * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

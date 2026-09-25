@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    { "path": "/api/cron/token-refresh", "schedule": "*/15 * * * *" },
+    { "path": "/api/cron/sla-check", "schedule": "0 * * * *" },
+    { "path": "/api/cron/objective-observer", "schedule": "0 * * * *" },
+    { "path": "/api/cron/followup-check", "schedule": "0 9 * * *" },
+    { "path": "/api/cron/growth-loop-check", "schedule": "0 4 * * *" }
+  ]
+}
