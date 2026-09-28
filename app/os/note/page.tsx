@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/growth-os/shared/PageHeader";
 import { StatusBadge } from "@/components/growth-os/shared/StatusBadge";
-import { NOTE_ARTICLE_STAGE_LABELS } from "@/lib/growth-os/types";
+import { NOTE_ARTICLE_STATUS_LABELS } from "@/lib/growth-os/types";
 import { GROWTH_OS_NOTE_ROUTE } from "@/lib/routes";
 
 export const metadata: Metadata = { title: "note | note Growth OS" };
@@ -31,7 +31,7 @@ export default async function NoteArticlesPage() {
                   <p className="truncate font-medium text-neutral-900">{article.title || "(執筆中)"}</p>
                   <p className="mt-1 truncate text-xs text-gray-400">
                     {article.type === "PAID" ? `有料note (¥${article.price ?? "未設定"})` : "無料note"} ・{" "}
-                    {NOTE_ARTICLE_STAGE_LABELS[article.current_stage]}
+                    {NOTE_ARTICLE_STATUS_LABELS[article.status]}
                     {article.revision_count > 0 && ` ・ 修正${article.revision_count}回目`}
                   </p>
                 </div>

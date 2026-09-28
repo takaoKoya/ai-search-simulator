@@ -12,6 +12,8 @@ import {
   Calendar,
   BarChart3,
   Settings,
+  CheckSquare,
+  BookOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -23,6 +25,8 @@ import {
   GROWTH_OS_PRODUCTS_ROUTE,
   GROWTH_OS_CALENDAR_ROUTE,
   GROWTH_OS_ANALYTICS_ROUTE,
+  GROWTH_OS_APPROVAL_ROUTE,
+  GROWTH_OS_EXPERIENCE_ROUTE,
   GROWTH_OS_SETTINGS_ROUTE,
 } from "@/lib/routes";
 
@@ -30,8 +34,10 @@ const NAV_ITEMS = [
   { href: GROWTH_OS_DASHBOARD_ROUTE, label: "Dashboard", icon: LayoutDashboard },
   { href: GROWTH_OS_RESEARCH_ROUTE, label: "Research", icon: Search },
   { href: GROWTH_OS_IDEAS_ROUTE, label: "Ideas", icon: Lightbulb },
+  { href: GROWTH_OS_APPROVAL_ROUTE, label: "承認キュー", icon: CheckSquare },
   { href: GROWTH_OS_THREADS_ROUTE, label: "Threads", icon: MessageCircle },
   { href: GROWTH_OS_NOTE_ROUTE, label: "note", icon: FileText },
+  { href: GROWTH_OS_EXPERIENCE_ROUTE, label: "Experience Library", icon: BookOpen },
   { href: GROWTH_OS_PRODUCTS_ROUTE, label: "Products", icon: Package },
   { href: GROWTH_OS_CALENDAR_ROUTE, label: "Calendar", icon: Calendar },
   { href: GROWTH_OS_ANALYTICS_ROUTE, label: "Analytics", icon: BarChart3 },

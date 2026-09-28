@@ -2,10 +2,13 @@ import type { Metadata } from "next";
 import { requireGrowthOsUser } from "@/lib/growth-os/auth";
 import { countJobsCreatedToday, getDailyAiJobLimit } from "@/lib/growth-os/db/settings";
 import { sumEstimatedCostThisMonth } from "@/lib/growth-os/db/jobs";
-import { updateDailyJobLimitAction } from "@/lib/growth-os/actions";
+import { updateDailyJobLimitAction, updateWritingProfileAction } from "@/lib/growth-os/actions";
+import { getWritingProfile } from "@/lib/growth-os/db/writingProfile";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Select } from "@/components/ui/select";
 import { Progress } from "@/components/ui/progress";
 import { PageHeader } from "@/components/growth-os/shared/PageHeader";
 import { IDEA_SCORE_CRITERIA } from "@/lib/growth-os/types";
@@ -14,10 +17,11 @@ export const metadata: Metadata = { title: "Settings | note Growth OS" };
 
 export default async function SettingsPage() {
   const { supabase, userId } = await requireGrowthOsUser();
-  const [limit, usedToday, monthlyCostUsd] = await Promise.all([
+  const [limit, usedToday, monthlyCostUsd, writingProfile] = await Promise.all([
     getDailyAiJobLimit(supabase, userId),
     countJobsCreatedToday(supabase, userId),
     sumEstimatedCostThisMonth(supabase, userId),
+    getWritingProfile(supabase, userId),
   ]);
 
   return (
@@ -102,6 +106,107 @@ export default async function SettingsPage() {
             90点以上=最優先候補 / 85〜89点=制作候補 / 75〜84点=保留候補 / 74点以下=低優先(表示ラベルはtotal_scoreの帯によるもので、
             statusとは別に算出されます)
           </p>
+        </CardContent>
+      </Card>
+
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>Writing Profile(あなたの声)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="mb-4 text-xs text-gray-400">
+            Threads/note生成時にAIが参考にする文体設定です。あなた自身の言葉づかいに近づけるほど、AI臭を減らせます。
+          </p>
+          <form action={updateWritingProfileAction} className="space-y-4 text-sm">
+            <div>
+              <label className="mb-1 block text-xs text-gray-400" htmlFor="preferred_tone">
+                トーン(自由記述)
+              </label>
+              <Input
+                id="preferred_tone"
+                name="preferred_tone"
+                defaultValue={writingProfile?.preferred_tone ?? ""}
+                placeholder="例: 落ち着いた、親しみやすい、断定しすぎない"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
+              <div>
+                <label className="mb-1 block text-xs text-gray-400" htmlFor="sentence_length">
+                  文の長さ
+                </label>
+                <Select id="sentence_length" name="sentence_length" defaultValue={writingProfile?.sentence_length ?? "MEDIUM"}>
+                  <option value="SHORT">短め</option>
+                  <option value="MEDIUM">標準</option>
+                  <option value="LONG">長め</option>
+                </Select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-gray-400" htmlFor="line_break_style">
+                  改行スタイル
+                </label>
+                <Select id="line_break_style" name="line_break_style" defaultValue={writingProfile?.line_break_style ?? "MODERATE"}>
+                  <option value="FREQUENT">こまめに改行</option>
+                  <option value="MODERATE">標準</option>
+                  <option value="MINIMAL">改行少なめ</option>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
+              {(
+                [
+                  { key: "humor_level", label: "ユーモア度" },
+                  { key: "directness", label: "率直さ" },
+                  { key: "emotional_level", label: "感情表現の強さ" },
+                  { key: "technical_level", label: "専門用語レベル" },
+                  { key: "emoji_level", label: "絵文字使用度" },
+                ] as const
+              ).map(({ key, label }) => (
+                <div key={key}>
+                  <label className="mb-1 block text-xs text-gray-400" htmlFor={key}>
+                    {label}(0-100)
+                  </label>
+                  <Input
+                    id={key}
+                    name={key}
+                    type="number"
+                    min={0}
+                    max={100}
+                    defaultValue={writingProfile?.[key] ?? 30}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-gray-400" htmlFor="ng_phrases">
+                NGフレーズ(カンマ区切り)
+              </label>
+              <Textarea
+                id="ng_phrases"
+                name="ng_phrases"
+                rows={2}
+                defaultValue={writingProfile?.ng_phrases.join("、") ?? ""}
+                placeholder="例: 結論から言うと、〜なのです"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-gray-400" htmlFor="preferred_phrases">
+                好むフレーズ(カンマ区切り)
+              </label>
+              <Textarea
+                id="preferred_phrases"
+                name="preferred_phrases"
+                rows={2}
+                defaultValue={writingProfile?.preferred_phrases.join("、") ?? ""}
+              />
+            </div>
+
+            <Button size="md" type="submit">
+              保存する
+            </Button>
+          </form>
         </CardContent>
       </Card>
     </div>

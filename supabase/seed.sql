@@ -269,3 +269,278 @@ insert into public.gos_ai_jobs (user_id, job_type, target_type, target_id, statu
 ('a0000000-0000-0000-0000-000000000001', 'RESEARCH_CLASSIFY', 'RESEARCH_ITEM', '10000000-0000-0000-0000-000000000005', 'SUCCEEDED', 'claude-sonnet-5', 1200, 350, 0.00590, now() - interval '1 day', now() - interval '1 day'),
 ('a0000000-0000-0000-0000-000000000001', 'IDEA_GENERATE', 'RESEARCH_ITEM_SET', '10000000-0000-0000-0000-000000000005', 'SUCCEEDED', 'claude-sonnet-5', 2400, 900, 0.01380, now() - interval '1 day', now() - interval '1 day'),
 ('a0000000-0000-0000-0000-000000000001', 'IDEA_SCORE', 'IDEA', '20000000-0000-0000-0000-000000000001', 'SUCCEEDED', 'claude-sonnet-5', 1800, 700, 0.01060, now() - interval '1 day', now() - interval '1 day');
+
+-- ============================================================
+-- フェーズ3デモウォークスルー(セクション31):
+-- 「50代。会社がなくなったら、あなたには何が残りますか？」というAPPROVED Ideaを、
+-- Content Strategy → Threads 5案 → 無料noteのOutline/Draft → AI Review → Fact Check まで
+-- 実際に流した状態を再現する。架空の体験は一切生成せず、一人称の体験談は
+-- Experience Libraryに登録済みの実体験(VERIFIED_BY_USER)だけを使う。
+-- ============================================================
+
+insert into public.gos_content_ideas (
+  id, user_id, research_item_id, title, summary, hook, angle, target_persona, core_problem, harm_types,
+  demand_score, pain_score, willingness_to_pay_score, competition_opportunity_score, trend_score,
+  threads_virality_score, note_fit_score, product_connection_score, user_fit_score,
+  score_reason, recommended_format, recommended_free_or_paid, status,
+  confidence_score, evidence_count, source_count, freshness_score, duplicate_score, most_similar_idea_id
+) values
+('21000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000005',
+ '50代。会社がなくなったら、あなたには何が残りますか？', 'AIによる業務代替と会社依存の不安を起点に、読者自身に問いかける形のテーマ',
+ 'ChatGPTに自分の仕事を要約させたら5秒で終わった。', '「あなたには」という二人称で読者自身に当事者性を持たせる',
+ '大手企業勤務、45〜59歳、会社員。転職経験の有無を問わない。', '会社という看板がなくなった時、自分自身に市場価値があるのかわからない',
+ array['Ambition','Money'],
+ 14, 15, 13, 9, 10, 9, 9, 9, 5,
+ '[{"criterion":"demand","score":14,"reason":"「会社がなくなったら」という問いは45〜59歳の会社員に広く刺さる","evidence":"Research#4,#5"},{"criterion":"pain","score":15,"reason":"市場価値の不確かさは自己肯定感に直結する深い悩み","evidence":"Research#5の投稿への共感反応"},{"criterion":"willingness_to_pay","score":13,"reason":"自己の棚卸しを支援するワーク形式への支払意欲が見込める","evidence":"類似の自己分析コンテンツの販売実績"},{"criterion":"competition_opportunity","score":9,"reason":"「あなたには」と二人称で問いかける切り口は競合が少ない","evidence":"検索結果の薄さ"},{"criterion":"trend","score":10,"reason":"生成AI導入のニュースが継続的に報じられている","evidence":"Research#4"},{"criterion":"threads_virality","score":9,"reason":"問いかけ型は保存・引用されやすい","evidence":"類似投稿のエンゲージメント傾向"},{"criterion":"note_fit","score":9,"reason":"ワーク形式へ展開しやすく長文向き","evidence":"読者の検索行動"},{"criterion":"product_connection","score":9,"reason":"棚卸しワークとして有料商品に直結しやすい","evidence":"類似ワークショップの実績"},{"criterion":"user_fit","score":5,"reason":"ブランドの中心思想と完全に一致","evidence":"「会社がなくても生きられる自分」というテーマそのもの"}]'::jsonb,
+ 'BOTH', 'PAID', 'APPROVED', 90, 2, 2, 91, 0.15, null)
+on conflict (id) do nothing;
+
+insert into public.gos_idea_sources (id, user_id, idea_id, research_item_id, evidence) values
+('30000000-0000-0000-0000-000000000014', 'a0000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000004', '大手企業が生成AI導入により今後3年で事務職を3割削減する方針を発表'),
+('30000000-0000-0000-0000-000000000015', 'a0000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001', '10000000-0000-0000-0000-000000000005', 'ChatGPTに自分の業務を要約させたら5秒で終わったという投稿が強い共感を集めている')
+on conflict (idea_id, research_item_id) do nothing;
+
+-- Content Strategy: 「読者をどう動かすか」を定義する
+insert into public.gos_content_strategies (
+  id, user_id, idea_id, target_reader, reader_situation, surface_problem, deep_problem, desired_emotion,
+  desired_action, main_message, unique_angle, content_goal, free_or_paid, cta_strategy,
+  threads_role, free_note_role, paid_note_role
+) values
+('61000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001',
+ '45〜59歳、大手・中堅企業に勤める会社員。転職や独立はまだ考えていない。',
+ '会社の看板があるうちは気づかないが、AI導入のニュースを見るたび「自分は大丈夫か」という不安がよぎっている状態',
+ '生成AIに自分の仕事が代替されるのではという漠然とした不安',
+ '会社という看板を外した時、自分自身に市場価値があるのかどうかがわからないという本質的な恐怖',
+ '不安ではなく、落ち着いた当事者意識(「気づけてよかった」という納得感)',
+ 'まず自分がこれまで積み上げてきた経験を棚卸ししてみる',
+ '会社を辞める必要はない。ただ、会社がなくても生きられる自分を今のうちに作っておこう',
+ '「転職しよう」ではなく「棚卸ししよう」という、辞める/辞めないの二択から外れた提案',
+ '読者に「棚卸し」という具体的で低リスクな最初の一歩を踏み出してもらう',
+ 'BOTH', 'Threadsで気づきを与え、無料noteで棚卸しの視点を示し、有料note/ワークで実際に手を動かしてもらう',
+ '「あなたには」と二人称で問いかけ、自分ごと化のきっかけを作る',
+ '棚卸しの視点(何を・なぜ棚卸しすべきか)を示し、思考の整理を後押しする',
+ '実際に棚卸しをやり切るための具体的なワークシートと手順を提供する')
+on conflict (idea_id) do nothing;
+
+-- Threads 5パターン(セクション3): FAILURE(体験・ストーリー型)は登録済み体験が無い前提で
+-- 一般論として書き、一人称の体験を捏造していない(experience_idsは空)。
+insert into public.gos_threads_posts (
+  id, user_id, idea_id, strategy_id, pattern_type, body,
+  hook_score, empathy_score, humanity_score, clarity_score, shareability_score,
+  sales_smell_score, ai_smell_score, preachiness_score, fear_score, overall_score,
+  score_reason, rewrite_count, manual_edited, experience_ids, status
+) values
+('62000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001', '61000000-0000-0000-0000-000000000001',
+ 'EMPATHY',
+ 'ChatGPTに自分の仕事を要約させたら、5秒で終わった。' || chr(10) || chr(10) ||
+ '笑うしかなかった。20年かけて覚えたことが、たった5秒。' || chr(10) || chr(10) ||
+ '同じような経験、ありませんか。会社の看板の下でやってきたことが、看板を外した瞬間にどれだけ残るのか。考えたことがない人の方が多いはずです。',
+ 88, 86, 82, 90, 84, 8, 12, 15, 30, 84,
+ '[{"criterion":"hook","score":88,"reason":"「5秒で終わった」という具体的な数字が冒頭で興味を引く"},{"criterion":"empathy","score":86,"reason":"同世代の会社員が共感しやすい体験を起点にしている"},{"criterion":"humanity","score":82,"reason":"「笑うしかなかった」という率直な感情表現がある"},{"criterion":"clarity","score":90,"reason":"短文・改行が多く読みやすい"},{"criterion":"shareability","score":84,"reason":"問いかけで終わるため引用・保存されやすい"},{"criterion":"sales_smell","score":8,"reason":"売り込み要素が無い"},{"criterion":"ai_smell","score":12,"reason":"定型的な三段構成になっていない"},{"criterion":"preachiness","score":15,"reason":"説教口調ではない"},{"criterion":"fear","score":30,"reason":"不安を煽りすぎず問いかけに留めている"}]'::jsonb,
+ 0, false, '{}', 'WAITING_APPROVAL'),
+
+('62000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001', '61000000-0000-0000-0000-000000000001',
+ 'PROBLEM',
+ '生成AIの導入で事務職を段階的に削減する。そんなニュースを、他人事として読んでいませんか。' || chr(10) || chr(10) ||
+ '「自分の会社はまだ大丈夫」ではなく、「自分の仕事の中身」を見たとき、AIに置き換えられる部分がどれくらいあるか。一度、棚卸ししてみる価値はあります。',
+ 80, 75, 70, 88, 78, 10, 10, 20, 42, 79,
+ '[{"criterion":"hook","score":80,"reason":"ニュースを引用しつつ自分事化を促す問いかけがある"},{"criterion":"empathy","score":75,"reason":"「他人事として読んでいませんか」という指摘が刺さる"},{"criterion":"humanity","score":70,"reason":"やや解説寄りで感情の起伏は控えめ"},{"criterion":"clarity","score":88,"reason":"構成がシンプルで理解しやすい"},{"criterion":"shareability","score":78,"reason":"問題提起として拡散されやすい"},{"criterion":"sales_smell","score":10,"reason":"商品誘導が無い"},{"criterion":"ai_smell","score":10,"reason":"自然な問いかけで終わっている"},{"criterion":"preachiness","score":20,"reason":"軽度の説教感はあるが許容範囲"},{"criterion":"fear","score":42,"reason":"不安要素はあるが行動提案で締めている"}]'::jsonb,
+ 0, false, '{}', 'WAITING_APPROVAL'),
+
+('62000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001', '61000000-0000-0000-0000-000000000001',
+ 'FAILURE',
+ '一般的なケースでは、と前置きします。私自身の体験ではなく、周囲でよく聞く話としてです。' || chr(10) || chr(10) ||
+ '「会社の看板を外した自分に自信が持てない」という悩みは、50代の会社員から驚くほどよく聞きます。' || chr(10) || chr(10) ||
+ 'もしあなたにも近い経験があれば、それこそが「棚卸し」の最初の材料になるはずです。',
+ 62, 68, 55, 80, 60, 12, 18, 25, 35, 66,
+ '[{"criterion":"hook","score":62,"reason":"一般論からの入りのため引きはやや弱い"},{"criterion":"empathy","score":68,"reason":"「よく聞く話」として共感の輪を示している"},{"criterion":"humanity","score":55,"reason":"一人称の実体験を使っていないため人間味はやや控えめ"},{"criterion":"clarity","score":80,"reason":"構成は明快"},{"criterion":"shareability","score":60,"reason":"具体性がやや弱く拡散力は中程度"},{"criterion":"sales_smell","score":12,"reason":"売り込み要素は無い"},{"criterion":"ai_smell","score":18,"reason":"前置きがやや説明的"},{"criterion":"preachiness","score":25,"reason":"軽度の説教感がある"},{"criterion":"fear","score":35,"reason":"不安喚起は控えめ"}]'::jsonb,
+ 0, false, '{}', 'WAITING_APPROVAL'),
+
+('62000000-0000-0000-0000-000000000004', 'a0000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001', '61000000-0000-0000-0000-000000000001',
+ 'QUESTION',
+ '会社の名刺を渡さずに自己紹介するとしたら、あなたは何と言いますか。' || chr(10) || chr(10) ||
+ '肩書きでも、部署でもなく。「自分は何ができる人間か」だけで語るとしたら。' || chr(10) || chr(10) ||
+ '意外と、言葉に詰まる人が多いテーマです。',
+ 90, 82, 78, 92, 88, 6, 10, 10, 28, 88,
+ '[{"criterion":"hook","score":90,"reason":"具体的な行動を想像させる問いかけが強い"},{"criterion":"empathy","score":82,"reason":"多くの会社員が一度は考える問いである"},{"criterion":"humanity","score":78,"reason":"問いかけ自体が内省的で人間味がある"},{"criterion":"clarity","score":92,"reason":"短く明快"},{"criterion":"shareability","score":88,"reason":"自分ごと化しやすく引用されやすい"},{"criterion":"sales_smell","score":6,"reason":"売り込み要素が無い"},{"criterion":"ai_smell","score":10,"reason":"自然な問いかけ調"},{"criterion":"preachiness","score":10,"reason":"説教臭が無い"},{"criterion":"fear","score":28,"reason":"不安よりも内省を促す設計"}]'::jsonb,
+ 0, false, '{}', 'WAITING_APPROVAL'),
+
+('62000000-0000-0000-0000-000000000005', 'a0000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001', '61000000-0000-0000-0000-000000000001',
+ 'CONTRARIAN',
+ '「会社に依存しない自分を作ろう」と聞くと、辞める準備だと思われがちです。' || chr(10) || chr(10) ||
+ '逆です。むしろ、辞めなくていいと思えるようになるための準備です。' || chr(10) || chr(10) ||
+ '会社を辞めないまま、会社がなくても大丈夫な自分を先に作っておく。順番を変えるだけの話です。',
+ 84, 78, 74, 86, 82, 9, 11, 12, 25, 82,
+ '[{"criterion":"hook","score":84,"reason":"一般的な思い込みを反転させる導入が興味を引く"},{"criterion":"empathy","score":78,"reason":"「辞める前提」への誤解を代弁している"},{"criterion":"humanity","score":74,"reason":"順番を変えるという柔らかい提案に人間味がある"},{"criterion":"clarity","score":86,"reason":"逆説の構造が明快"},{"criterion":"shareability","score":82,"reason":"意外性があり引用されやすい"},{"criterion":"sales_smell","score":9,"reason":"売り込み要素が無い"},{"criterion":"ai_smell","score":11,"reason":"自然な逆説表現"},{"criterion":"preachiness","score":12,"reason":"説教臭が薄い"},{"criterion":"fear","score":25,"reason":"不安ではなく安心を提示する設計"}]'::jsonb,
+ 0, false, '{}', 'WAITING_APPROVAL')
+on conflict (id) do nothing;
+
+-- Experience Library: AIが一人称の体験談を書く際に使ってよい、本人の実体験
+insert into public.gos_experience_library (id, user_id, title, summary, tags, confidence) values
+('68000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001',
+ '経理から社内DX推進チームへ異動し、AIツール導入を担当した経験',
+ '経理部門で10年以上請求書処理を担当していたが、社内DX推進チームへ異動し、生成AIを使った業務効率化ツールの導入を担当することになった。最初は自分の仕事がAIに奪われる側だと思っていたが、実際にはAIを使いこなす側に回れることに気づいた。',
+ array['AI','社内異動','経理'], 'VERIFIED_BY_USER'),
+('68000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001',
+ '40代で転職活動をして、書類選考でなかなか通らなかった経験',
+ '40代半ばで一度だけ転職活動をしたことがある。職務経歴書の書き方が分からず、最初の10社はすべて書類選考で落ちた。転職エージェントに経歴の棚卸しを手伝ってもらってから通過率が上がった。',
+ array['転職','棚卸し'], 'VERIFIED_BY_USER'),
+('68000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000001',
+ '副業でライティングを始めたが、3ヶ月で辞めてしまった経験',
+ '副業でクラウドソーシングのライティング案件を始めたが、単価が低く続かなかった。詳細を思い出しきれておらず、本人確認が必要。',
+ array['副業'], 'NEEDS_REVIEW')
+on conflict (id) do nothing;
+
+-- Writing Profile: Threads/note生成時に参照する文体設定
+insert into public.gos_writing_profiles (
+  id, user_id, preferred_tone, sentence_length, humor_level, directness, emotional_level,
+  technical_level, emoji_level, line_break_style, ng_phrases, preferred_phrases
+) values
+('69000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001',
+ '落ち着いていて、断定しすぎない。読者に語りかけるような口調', 'MEDIUM', 15, 55, 65, 25, 0, 'MODERATE',
+ array['結論から言うと','〜なのです','重要なのは'],
+ array['〜かもしれません','一緒に考えてみませんか','同じような経験はありませんか'])
+on conflict (user_id) do nothing;
+
+insert into public.gos_writing_samples (id, user_id, source_type, source_id, excerpt) values
+('6a000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', 'THREADS_POST', '62000000-0000-0000-0000-000000000004',
+ '会社の名刺を渡さずに自己紹介するとしたら、あなたは何と言いますか。肩書きでも、部署でもなく。「自分は何ができる人間か」だけで語るとしたら。')
+on conflict (id) do nothing;
+
+-- note(無料): Outline承認済み・本文Draft済み・AI Review/Fact Check完了・WAITING_APPROVAL
+insert into public.gos_note_articles (
+  id, user_id, idea_id, strategy_id, type, price, title, title_candidates, lead, reader_problem, promise,
+  body_markdown, cta_type, cta_text, outline_approved_at, revision_count, quality_score, quality_below_threshold,
+  is_paid_candidate, paid_candidate_evaluation, status
+) values
+('63000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001', '61000000-0000-0000-0000-000000000001',
+ 'FREE', null,
+ '50代。会社がなくなったら、あなたには何が残りますか？',
+ '[
+   {"title":"50代。会社がなくなったら、あなたには何が残りますか？","type":"疑問","click_score":88,"trust_score":82,"specificity_score":75,"sales_smell_score":10},
+   {"title":"会社の看板を外した自分に、市場価値はあるか","type":"問題提起","click_score":80,"trust_score":78,"specificity_score":70,"sales_smell_score":12},
+   {"title":"ChatGPTが5秒で終わらせた仕事と、20年かけた自分","type":"共感","click_score":85,"trust_score":80,"specificity_score":82,"sales_smell_score":8},
+   {"title":"会社に依存しない自分を、辞める前に作っておく理由","type":"ベネフィット","click_score":78,"trust_score":76,"specificity_score":74,"sales_smell_score":18},
+   {"title":"転職しなかった私が、それでも棚卸しをした告白","type":"告白","click_score":70,"trust_score":74,"specificity_score":68,"sales_smell_score":14}
+ ]'::jsonb,
+ '「ChatGPTに自分の仕事を要約させたら5秒で終わった」。笑い話のつもりで書いたその投稿に、同世代の会社員から驚くほど多くの共感が集まりました。今日は、その先にある「棚卸し」の話をします。',
+ '会社という看板がなくなった時、自分自身に市場価値があるのかどうかがわからない',
+ 'この記事を読み終える頃には、自分の経験を棚卸しする最初の視点が手に入ります',
+ '## なぜ「会社の看板を外した自分」を考える必要があるのか' || chr(10) || chr(10) ||
+ '生成AIの導入によって、大手企業が事務職を段階的に削減する方針を発表するニュースが相次いでいます。「自分の会社はまだ大丈夫」と思っていても、AIに置き換え可能な業務がどれだけあるかは、会社の規模とは関係ありません。まずはこの現実を、他人事ではなく自分の仕事に当てはめて見てみることから始めます。' || chr(10) || chr(10) ||
+ '## 自分の市場価値が見えなくなる3つの理由' || chr(10) || chr(10) ||
+ '一つ目は、会社の看板と自分の実力を混同してしまうこと。二つ目は、日々の業務に追われて自分のスキルを言語化する機会が無いこと。三つ目は、比較対象が社内の同僚だけになり、外の市場の物差しを知らないことです。どれも特別なことではなく、多くの会社員に共通する構造的な問題です。' || chr(10) || chr(10) ||
+ '## 棚卸しをしたある会社員の話' || chr(10) || chr(10) ||
+ '経理部門で10年以上請求書処理を担当していたが、社内のDX推進チームへ異動し、生成AIを使った業務効率化ツールの導入を担当することになった、という会社員がいます。最初は自分の仕事がAIに奪われる側だと思っていたが、実際にはAIを使いこなす側に回れることに気づいた、と話していました。奪われるかどうかは、蓋を開けてみるまでわからないということです。' || chr(10) || chr(10) ||
+ '## 今日からできる小さな棚卸しステップ' || chr(10) || chr(10) ||
+ 'いきなり転職活動を始める必要はありません。まずは今の仕事の中で「人から頼まれること」を10個書き出してみてください。それだけで、会社の看板を外した自分に何が残るのか、輪郭が見え始めるはずです。',
+ 'FOLLOW', '続きを知りたい方はフォローしてお待ちください。近日、実際に手を動かして棚卸しをするための実践編を予定しています。',
+ now() - interval '2 hours', 0, 84, false,
+ true,
+ '{"problem_depth":82,"actionability":75,"repeat_value":70,"specificity":68,"transformation_value":78,"purchase_intent":72,"is_paid_candidate":true,"reasoning":"問題の深さと変化をもたらす価値は高く、棚卸しワークとして具体的な手順・テンプレートに展開すれば購入意欲が見込める。"}'::jsonb,
+ 'WAITING_APPROVAL')
+on conflict (id) do nothing;
+
+insert into public.gos_article_sections (
+  id, user_id, article_id, heading, purpose, key_points, evidence_required, experience_required,
+  content, source_ids, experience_ids, sort_order, manual_edited
+) values
+('64000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', '63000000-0000-0000-0000-000000000001',
+ 'なぜ「会社の看板を外した自分」を考える必要があるのか', '問題提起。AI導入という客観的事実から、読者自身の仕事へと視点を移す',
+ '["生成AI導入による事務職削減の動き", "会社の規模と代替可能性は無関係"]'::jsonb, true, false,
+ '生成AIの導入によって、大手企業が事務職を段階的に削減する方針を発表するニュースが相次いでいます。「自分の会社はまだ大丈夫」と思っていても、AIに置き換え可能な業務がどれだけあるかは、会社の規模とは関係ありません。まずはこの現実を、他人事ではなく自分の仕事に当てはめて見てみることから始めます。',
+ array['10000000-0000-0000-0000-000000000004']::uuid[], '{}', 0, false),
+
+('64000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001', '63000000-0000-0000-0000-000000000001',
+ '自分の市場価値が見えなくなる3つの理由', '深掘り。読者が自分に当てはめて考えられる構造を示す',
+ '["看板と実力の混同", "スキルを言語化する機会の欠如", "社内比較しか物差しがない"]'::jsonb, false, false,
+ '一つ目は、会社の看板と自分の実力を混同してしまうこと。二つ目は、日々の業務に追われて自分のスキルを言語化する機会が無いこと。三つ目は、比較対象が社内の同僚だけになり、外の市場の物差しを知らないことです。どれも特別なことではなく、多くの会社員に共通する構造的な問題です。',
+ '{}', '{}', 1, false),
+
+('64000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000001', '63000000-0000-0000-0000-000000000001',
+ '棚卸しをしたある会社員の話', '体験。登録済みのExperience Libraryの実体験のみを使用する(捏造禁止)',
+ '["実際に異動してAI導入を担当した経験", "奪われる側から使う側への転換"]'::jsonb, false, true,
+ '経理部門で10年以上請求書処理を担当していたが、社内のDX推進チームへ異動し、生成AIを使った業務効率化ツールの導入を担当することになった、という会社員がいます。最初は自分の仕事がAIに奪われる側だと思っていたが、実際にはAIを使いこなす側に回れることに気づいた、と話していました。奪われるかどうかは、蓋を開けてみるまでわからないということです。',
+ '{}', array['68000000-0000-0000-0000-000000000001']::uuid[], 2, false),
+
+('64000000-0000-0000-0000-000000000004', 'a0000000-0000-0000-0000-000000000001', '63000000-0000-0000-0000-000000000001',
+ '今日からできる小さな棚卸しステップ', '行動喚起。低リスクで踏み出せる最初の一歩を提示する',
+ '["いきなり転職しない", "「人から頼まれること」を10個書き出す"]'::jsonb, false, false,
+ 'いきなり転職活動を始める必要はありません。まずは今の仕事の中で「人から頼まれること」を10個書き出してみてください。それだけで、会社の看板を外した自分に何が残るのか、輪郭が見え始めるはずです。',
+ '{}', '{}', 3, false)
+on conflict (id) do nothing;
+
+insert into public.gos_article_versions (id, user_id, target_type, target_id, version, content, created_by, reason) values
+('65000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 1,
+ (select body_markdown from public.gos_note_articles where id = '63000000-0000-0000-0000-000000000001'),
+ 'AI', '初回ドラフト生成')
+on conflict (target_type, target_id, version) do nothing;
+
+-- Fact Check: 数字を含む主張はSourceがなければUNVERIFIEDへ強制降格する(アプリ側ルール)ことを示す
+insert into public.gos_fact_claims (id, user_id, article_id, section_id, claim, classification, source_id, confidence, action_required) values
+('66000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', '63000000-0000-0000-0000-000000000001', '64000000-0000-0000-0000-000000000001',
+ '大手企業が生成AI導入により事務職を段階的に削減する方針を発表している', 'VERIFIED', '10000000-0000-0000-0000-000000000004', 92, false),
+('66000000-0000-0000-0000-000000000002', 'a0000000-0000-0000-0000-000000000001', '63000000-0000-0000-0000-000000000001', '64000000-0000-0000-0000-000000000003',
+ '経理部門で10年以上請求書処理を担当していたが、社内DX推進チームへ異動しAI導入を担当した', 'EXPERIENCE', null, 100, false),
+('66000000-0000-0000-0000-000000000003', 'a0000000-0000-0000-0000-000000000001', '63000000-0000-0000-0000-000000000001', null,
+ '棚卸しワークを実践した読者の8割が自分の市場価値に自信を持てるようになる', 'UNVERIFIED', null, 40, true)
+on conflict (id) do nothing;
+
+insert into public.gos_content_funnels (id, user_id, idea_id, threads_post_ids, free_note_id, paid_note_id, product_id) values
+('67000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', '21000000-0000-0000-0000-000000000001',
+ array[
+   '62000000-0000-0000-0000-000000000001', '62000000-0000-0000-0000-000000000002', '62000000-0000-0000-0000-000000000003',
+   '62000000-0000-0000-0000-000000000004', '62000000-0000-0000-0000-000000000005'
+ ]::uuid[],
+ '63000000-0000-0000-0000-000000000001', null, null)
+on conflict (idea_id) do nothing;
+
+-- 初期商品(セクション25): 固定商品としてコードへハードコードせず、DBデータとして投入する
+insert into public.gos_products (id, user_id, source_content_id, product_name, recommended_price, target, problem, solution, product_score, outline, status) values
+('80000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', '63000000-0000-0000-0000-000000000001',
+ '50代会社員のための「会社に依存しない自分」発見ワーク', 980,
+ '45〜59歳、会社に依存している自覚はあるが何から始めればいいか分からない会社員',
+ '会社という看板を外した時、自分自身に市場価値があるのかどうかがわからない',
+ '仕事・経験・人から頼まれることの棚卸しを通じて、会社に依存しない自分の輪郭を可視化するワーク',
+ 82,
+ '["仕事棚卸し","経験棚卸し","人から頼まれること","AI代替リスクの整理","AIで強化できる仕事の整理","お金に変えられる経験の洗い出し","副業候補の絞り込み","30日行動計画"]'::jsonb,
+ 'PROPOSED')
+on conflict (id) do nothing;
+
+-- ============================================================
+-- フェーズ3のAgentレビュー履歴(監査証跡サンプル)
+-- ============================================================
+insert into public.gos_ai_reviews (user_id, target_type, target_id, agent_type, score, verdict, feedback, raw_response) values
+('a0000000-0000-0000-0000-000000000001', 'IDEA', '21000000-0000-0000-0000-000000000001', 'STRATEGY_EDITOR', null, null,
+ 'Content Strategyを生成しました: 会社を辞める必要はない。ただ、会社がなくても生きられる自分を今のうちに作っておこう', null),
+('a0000000-0000-0000-0000-000000000001', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'TITLE_GENERATOR', null, null,
+ '推奨タイトル: 50代。会社がなくなったら、あなたには何が残りますか?(5案中)', null),
+('a0000000-0000-0000-0000-000000000001', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'OUTLINE_GENERATOR', null, null,
+ '4セクション構成のOutlineを生成しました。人間の承認待ちです。', null),
+('a0000000-0000-0000-0000-000000000001', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'SECTION_WRITER', null, null,
+ 'Section「なぜ「会社の看板を外した自分」を考える必要があるのか」を執筆しました', null),
+('a0000000-0000-0000-0000-000000000001', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'SECTION_WRITER', null, null,
+ 'Section「棚卸しをしたある会社員の話」を執筆しました(Experience Library #1を使用)', null),
+('a0000000-0000-0000-0000-000000000001', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'STRATEGY_EDITOR', null, 'PASS',
+ 'Content Strategyで定めたターゲット・悩み・導線と本文が一致しています。', null),
+('a0000000-0000-0000-0000-000000000001', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'READER_50S_AGENT', null, 'PASS',
+ '自分の話として読める内容で、説教感も無く最後まで読みやすいです。', null),
+('a0000000-0000-0000-0000-000000000001', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'CHIEF_EDITOR_AGENT', null, 'PASS',
+ '冗長な箇所や不自然な三段構成は見られません。AI臭の指摘: なし', '[{"criterion":"hook","score":85,"reason":"具体的なエピソードから始まり引きが強い"},{"criterion":"empathy","score":84,"reason":"同世代の悩みに寄り添っている"},{"criterion":"clarity","score":88,"reason":"構成が明快"},{"criterion":"humanity","score":80,"reason":"登録済みの実体験を用いた具体性がある"},{"criterion":"originality","score":78,"reason":"「棚卸し」という切り口に独自性がある"},{"criterion":"usefulness","score":82,"reason":"具体的な次の一歩を提示している"},{"criterion":"credibility","score":86,"reason":"AI導入の事実はSourceに基づいている"},{"criterion":"structure","score":85,"reason":"導入から行動喚起までの流れが自然"},{"criterion":"cta","score":80,"reason":"無料noteから高額商品へ飛躍していない"},{"criterion":"commercial_potential","score":83,"reason":"有料ワークへの自然な布石になっている"}]'::jsonb),
+('a0000000-0000-0000-0000-000000000001', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'HUMANITY_CHECKER', 80, null,
+ '架空の失敗談を作らず、登録済みの実体験を適切に使っている点を評価しています。', null),
+('a0000000-0000-0000-0000-000000000001', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'FACT_CHECK_AGENT', null, 'NEEDS_REVISION',
+ '事実主張3件を抽出。うちUNVERIFIED 1件(公開前に人間の確認が必要です)', null),
+('a0000000-0000-0000-0000-000000000001', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'SALES_EDITOR_AGENT', 80, null,
+ '無料noteとして売り込み臭は低く、CTAも自然にフォロー導線へつながっています。', null),
+('a0000000-0000-0000-0000-000000000001', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'PAID_CANDIDATE_EVALUATOR', null, 'PASS',
+ '問題の深さと変化をもたらす価値が高く、棚卸しワークとして有料化候補になり得ます。', null);
+
+-- フェーズ3のAI Jobs(コスト表示サンプル)
+insert into public.gos_ai_jobs (user_id, job_type, target_type, target_id, status, model, input_tokens, output_tokens, estimated_cost, started_at, completed_at) values
+('a0000000-0000-0000-0000-000000000001', 'THREADS_GENERATE', 'IDEA', '21000000-0000-0000-0000-000000000001', 'SUCCEEDED', 'claude-sonnet-5', 2600, 1400, 0.02220, now() - interval '3 hours', now() - interval '3 hours'),
+('a0000000-0000-0000-0000-000000000001', 'ARTICLE_ADVANCE', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'SUCCEEDED', 'claude-sonnet-5', 1900, 1100, 0.01920, now() - interval '2 hours 40 minutes', now() - interval '2 hours 40 minutes'),
+('a0000000-0000-0000-0000-000000000001', 'ARTICLE_ADVANCE', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'SUCCEEDED', 'claude-sonnet-5', 4200, 2600, 0.04860, now() - interval '2 hours 20 minutes', now() - interval '2 hours 20 minutes'),
+('a0000000-0000-0000-0000-000000000001', 'ARTICLE_ADVANCE', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'SUCCEEDED', 'claude-sonnet-5', 2100, 900, 0.01800, now() - interval '2 hours 10 minutes', now() - interval '2 hours 10 minutes'),
+('a0000000-0000-0000-0000-000000000001', 'ARTICLE_ADVANCE', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'SUCCEEDED', 'claude-haiku-4-5', 1500, 500, 0.00170, now() - interval '2 hours', now() - interval '2 hours'),
+('a0000000-0000-0000-0000-000000000001', 'PAID_CANDIDATE_EVALUATE', 'NOTE_ARTICLE', '63000000-0000-0000-0000-000000000001', 'SUCCEEDED', 'claude-sonnet-5', 1300, 600, 0.01020, now() - interval '1 hour', now() - interval '1 hour');

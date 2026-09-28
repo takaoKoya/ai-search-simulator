@@ -84,3 +84,17 @@ export function findMostSimilarIdea(
 export function isDuplicate(score: number): boolean {
   return score >= DUPLICATE_SCORE_THRESHOLD;
 }
+
+/**
+ * Threads/note本文など、Idea以外の任意テキスト同士の類似度判定(セクション26)。
+ * 新規生成前に既存コンテンツと比較し、量産的な酷似コンテンツを防ぐために使う。
+ */
+export function textSimilarity(a: string, b: string): number {
+  return jaccardSimilarity(bigrams(a), bigrams(b));
+}
+
+export const CONTENT_DUPLICATE_SCORE_THRESHOLD = 0.6;
+
+export function isContentDuplicate(score: number): boolean {
+  return score >= CONTENT_DUPLICATE_SCORE_THRESHOLD;
+}

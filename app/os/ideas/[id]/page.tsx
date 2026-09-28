@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/growth-os/shared/PageHeader";
 import { ScoreBandBadge, IdeaStatusBadge } from "@/components/growth-os/shared/StatusBadge";
 import { IdeaApprovalActions } from "@/components/growth-os/dashboard/IdeaApprovalActions";
+import { CreateContentButton } from "@/components/growth-os/ideas/CreateContentButton";
 import { SecondaryChannelActions } from "@/components/growth-os/ideas/SecondaryChannelActions";
 import { ScoreRadarChart } from "@/components/growth-os/ideas/ScoreRadarChart";
 import { ScoreReasonTable } from "@/components/growth-os/ideas/ScoreReasonTable";
@@ -133,8 +134,10 @@ export default async function IdeaDetailPage({ params }: { params: Promise<{ id:
           {idea.status === "APPROVED" && (
             <div className="border-t border-gray-100 pt-4">
               <p className="mb-2 text-xs text-gray-400">
-                承認後の展開(Threads/note本格生成は次フェーズ対象。ここではフェーズ1で実装済みのパイプラインを試験的に呼び出せます)
+                承認後の展開: Content Strategy→Threads 5案→無料noteのOutlineまでを1クリックで自動生成します。
               </p>
+              <CreateContentButton ideaId={idea.id} />
+              <p className="mt-3 mb-2 text-xs text-gray-400">個別にThreads/noteだけを作りたい場合はこちら</p>
               <SecondaryChannelActions ideaId={idea.id} />
             </div>
           )}

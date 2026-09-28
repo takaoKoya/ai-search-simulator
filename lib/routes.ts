@@ -14,3 +14,5 @@ export const GROWTH_OS_PRODUCTS_ROUTE = "/os/products";
 export const GROWTH_OS_CALENDAR_ROUTE = "/os/calendar";
 export const GROWTH_OS_ANALYTICS_ROUTE = "/os/analytics";
 export const GROWTH_OS_SETTINGS_ROUTE = "/os/settings";
+export const GROWTH_OS_APPROVAL_ROUTE = "/os/approval";
+export const GROWTH_OS_EXPERIENCE_ROUTE = "/os/experience";

@@ -4,7 +4,12 @@ import { useState, useTransition } from "react";
 import { Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { retryArticlePipelineAction, approveArticleAction, publishArticleAction } from "@/lib/growth-os/actions";
+import {
+  retryArticlePipelineAction,
+  approveArticleAction,
+  publishArticleAction,
+  approveOutlineAction,
+} from "@/lib/growth-os/actions";
 import type { NoteArticle } from "@/lib/growth-os/types";
 
 export function ArticleActions({ article, hasPendingJob }: { article: NoteArticle; hasPendingJob: boolean }) {
@@ -30,13 +35,25 @@ export function ArticleActions({ article, hasPendingJob }: { article: NoteArticl
         </Button>
       )}
 
-      {!hasPendingJob && article.current_stage !== "DONE" && (
-        <Button size="md" disabled={isPending} onClick={() => startTransition(() => retryArticlePipelineAction(article.id))}>
-          AI処理を実行
-        </Button>
-      )}
+      {!hasPendingJob &&
+        article.status !== "OUTLINE" &&
+        article.status !== "WAITING_APPROVAL" &&
+        article.status !== "APPROVED" &&
+        article.status !== "PUBLISHED" &&
+        article.status !== "ANALYZED" &&
+        article.status !== "REJECTED" && (
+          <Button size="md" disabled={isPending} onClick={() => startTransition(() => retryArticlePipelineAction(article.id))}>
+            AI処理を実行
+          </Button>
+        )}
       {hasPendingJob && (
         <span className="text-sm text-gray-400">AI処理中です…(数分お待ちください)</span>
+      )}
+
+      {article.status === "OUTLINE" && (
+        <Button size="md" disabled={isPending} onClick={() => startTransition(() => approveOutlineAction(article.id))}>
+          Outlineを承認して本文生成
+        </Button>
       )}
 
       {article.status === "WAITING_APPROVAL" && (

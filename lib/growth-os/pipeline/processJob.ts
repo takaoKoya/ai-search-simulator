@@ -15,12 +15,13 @@ import {
 } from "@/lib/growth-os/scoring";
 import { computeConfidence, computeFreshnessScore, judgeIdea, CONFIDENCE_JUDGMENT_LABELS } from "@/lib/growth-os/confidence";
 import { findMostSimilarIdea, isDuplicate, type IdeaSimilarityCandidate } from "@/lib/growth-os/dedupe";
-import { generateThreadsPatterns, analyzeThreadsTone } from "@/lib/growth-os/agents/threadsGenerator";
 import { suggestProduct } from "@/lib/growth-os/agents/productSuggester";
 import { adviseOnAnalytics } from "@/lib/growth-os/agents/analyticsAdvisor";
 import { advanceArticlePipeline } from "@/lib/growth-os/pipeline/articlePipeline";
+import { handleThreadsGenerate, handleThreadsRewrite, handleThreadsToneAnalyze } from "@/lib/growth-os/pipeline/threadsPipeline";
 import { aggregateByTheme, listContentMetrics } from "@/lib/growth-os/db/metrics";
 import { SETTINGS_KEYS, upsertSetting } from "@/lib/growth-os/db/settings";
+import { getNoteArticle, setPaidCandidateEvaluation } from "@/lib/growth-os/db/articles";
 import type { AIUsage } from "@/lib/growth-os/ai/types";
 
 interface DispatchResult {
@@ -56,11 +57,15 @@ async function dispatch(supabase: SupabaseClient, job: AiJob): Promise<DispatchR
     case "IDEA_SCORE":
       return handleIdeaScore(supabase, job);
     case "THREADS_GENERATE":
-      return { result: await handleThreadsGenerate(supabase, job) };
+      return handleThreadsGenerate(supabase, job);
     case "THREADS_TONE_ANALYZE":
-      return { result: await handleThreadsToneAnalyze(supabase, job) };
+      return handleThreadsToneAnalyze(supabase, job);
+    case "THREADS_REWRITE":
+      return handleThreadsRewrite(supabase, job);
     case "ARTICLE_ADVANCE":
-      return { result: await handleArticleAdvance(supabase, job) };
+      return handleArticleAdvance(supabase, job);
+    case "PAID_CANDIDATE_EVALUATE":
+      return handlePaidCandidateEvaluate(supabase, job);
     case "PRODUCT_SUGGEST":
       return { result: await handleProductSuggest(supabase, job) };
     case "ANALYTICS_ADVISE":
@@ -259,80 +264,52 @@ async function handleIdeaScore(supabase: SupabaseClient, job: AiJob): Promise<Di
 }
 
 // ---------------------------------------------------------------------------
-// 以下、フェーズ1のThreads/note/Products/Analyticsは本フェーズでは変更しない。
+// note: STRATEGY→OUTLINE→DRAFT→AI_REVIEW→FACT_CHECK→WAITING_APPROVAL
 // ---------------------------------------------------------------------------
 
-async function handleThreadsGenerate(supabase: SupabaseClient, job: AiJob) {
-  const { data: idea, error } = await supabase.from("gos_content_ideas").select("*").eq("id", job.target_id).single();
-  if (error) throw error;
+async function handleArticleAdvance(supabase: SupabaseClient, job: AiJob): Promise<DispatchResult> {
+  const article = await getNoteArticle(supabase, job.user_id, job.target_id);
+  if (!article) throw new Error("Article not found");
 
-  const patterns = await generateThreadsPatterns(idea);
-
-  const created = [];
-  for (const pattern of patterns) {
-    const { data: post, error: insertError } = await supabase
-      .from("gos_threads_posts")
-      .insert({ user_id: job.user_id, idea_id: idea.id, pattern_type: pattern.pattern_type, body: pattern.body })
-      .select("*")
-      .single();
-    if (insertError) throw insertError;
-
-    await insertAiReview(supabase, job.user_id, {
-      target_type: "THREADS_POST",
-      target_id: post.id,
-      agent_type: "THREADS_GENERATOR",
-      feedback: `${pattern.pattern_type}パターンを生成`,
-    });
-
-    await enqueueJob(supabase, job.user_id, "THREADS_TONE_ANALYZE", "THREADS_POST", post.id);
-    created.push(post);
-  }
-
-  return { created_count: created.length };
+  return advanceArticlePipeline(supabase, job, article);
 }
 
-async function handleThreadsToneAnalyze(supabase: SupabaseClient, job: AiJob) {
-  const { data: post, error } = await supabase.from("gos_threads_posts").select("*").eq("id", job.target_id).single();
-  if (error) throw error;
+// ---------------------------------------------------------------------------
+// 有料note候補判定(セクション24)
+// ---------------------------------------------------------------------------
+async function handlePaidCandidateEvaluate(supabase: SupabaseClient, job: AiJob): Promise<DispatchResult> {
+  const article = await getNoteArticle(supabase, job.user_id, job.target_id);
+  if (!article) throw new Error("Article not found");
 
-  const toneScores = await analyzeThreadsTone(post.body);
+  const { data: idea } = await supabase
+    .from("gos_content_ideas")
+    .select("core_problem")
+    .eq("id", article.idea_id)
+    .maybeSingle();
 
-  await supabase
-    .from("gos_threads_posts")
-    .update({ tone_scores: toneScores, status: "WAITING_APPROVAL" })
-    .eq("id", job.target_id);
-
-  await insertAiReview(supabase, job.user_id, {
-    target_type: "THREADS_POST",
-    target_id: job.target_id,
-    agent_type: "THREADS_TONE_ANALYZER",
-    raw_response: toneScores,
+  const evaluation = await getAIProvider().evaluatePaidCandidate({
+    freeArticleTitle: article.title,
+    freeArticleBody: article.body_markdown,
+    coreProblem: idea?.core_problem ?? null,
   });
 
-  return toneScores;
+  await setPaidCandidateEvaluation(supabase, article.id, evaluation.data);
+
+  await insertAiReview(supabase, job.user_id, {
+    target_type: "NOTE_ARTICLE",
+    target_id: article.id,
+    agent_type: "PAID_CANDIDATE_EVALUATOR",
+    verdict: evaluation.data.is_paid_candidate ? "PASS" : "NEEDS_REVISION",
+    feedback: evaluation.data.reasoning,
+    raw_response: evaluation.data,
+  });
+
+  return { result: evaluation.data, usage: toJobUsage(evaluation.usage) };
 }
 
-async function handleArticleAdvance(supabase: SupabaseClient, job: AiJob) {
-  const { data: article, error } = await supabase
-    .from("gos_note_articles")
-    .select("*")
-    .eq("id", job.target_id)
-    .single();
-  if (error) throw error;
-
-  let idea = null;
-  if (article.idea_id) {
-    const { data: ideaRow } = await supabase
-      .from("gos_content_ideas")
-      .select("title, summary")
-      .eq("id", article.idea_id)
-      .maybeSingle();
-    idea = ideaRow;
-  }
-
-  const { result } = await advanceArticlePipeline(supabase, job, article, idea);
-  return result;
-}
+// ---------------------------------------------------------------------------
+// 以下、フェーズ1のProducts/Analyticsは本フェーズでは変更しない。
+// ---------------------------------------------------------------------------
 
 async function handleProductSuggest(supabase: SupabaseClient, job: AiJob) {
   const { data: article, error } = await supabase

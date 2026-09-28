@@ -157,11 +157,12 @@ export type ThreadsPatternType = "EMPATHY" | "PROBLEM" | "FAILURE" | "QUESTION" 
 export const THREADS_PATTERN_LABELS: Record<ThreadsPatternType, string> = {
   EMPATHY: "共感型",
   PROBLEM: "問題提起型",
-  FAILURE: "失敗談型",
+  FAILURE: "体験・ストーリー型",
   QUESTION: "問いかけ型",
-  CONTRARIAN: "逆張り型",
+  CONTRARIAN: "逆説・意外性型",
 };
 
+/** @deprecated フェーズ3の9軸評価(hook_score等)に置き換え。DB列は後方互換のため残置。 */
 export interface ThreadsToneScores {
   ai_smell: number;
   sales_smell: number;
@@ -173,13 +174,44 @@ export interface ThreadsToneScores {
 
 export type ThreadsPostStatus = "DRAFT" | "WAITING_APPROVAL" | "APPROVED" | "PUBLISHED" | "REJECTED";
 
+/** 9軸品質評価(セクション4)。sales_smell/ai_smell/preachiness/fearは低いほど良い。 */
+export interface ThreadsScoreReasonEntry {
+  criterion:
+    | "hook"
+    | "empathy"
+    | "humanity"
+    | "clarity"
+    | "shareability"
+    | "sales_smell"
+    | "ai_smell"
+    | "preachiness"
+    | "fear";
+  score: number;
+  reason: string;
+}
+
 export interface ThreadsPost {
   id: string;
   user_id: string;
   idea_id: string;
+  strategy_id: string | null;
   pattern_type: ThreadsPatternType;
   body: string;
   tone_scores: ThreadsToneScores | null;
+  hook_score: number | null;
+  empathy_score: number | null;
+  humanity_score: number | null;
+  clarity_score: number | null;
+  shareability_score: number | null;
+  sales_smell_score: number | null;
+  ai_smell_score: number | null;
+  preachiness_score: number | null;
+  fear_score: number | null;
+  overall_score: number | null;
+  score_reason: ThreadsScoreReasonEntry[];
+  rewrite_count: number;
+  manual_edited: boolean;
+  experience_ids: string[];
   status: ThreadsPostStatus;
   scheduled_at: string | null;
   published_at: string | null;
@@ -188,65 +220,263 @@ export interface ThreadsPost {
   updated_at: string;
 }
 
+/** Threads品質基準(セクション4)。1つでも未達なら最大2回までリライト対象。 */
+export const THREADS_QUALITY_BAR = {
+  overall_score: 80,
+  ai_smell_score: 30,
+  sales_smell_score: 40,
+  fear_score: 50,
+} as const;
+
+export function meetsThreadsQualityBar(post: Pick<ThreadsPost, "overall_score" | "ai_smell_score" | "sales_smell_score" | "fear_score">): boolean {
+  return (
+    (post.overall_score ?? 0) >= THREADS_QUALITY_BAR.overall_score &&
+    (post.ai_smell_score ?? 100) <= THREADS_QUALITY_BAR.ai_smell_score &&
+    (post.sales_smell_score ?? 100) <= THREADS_QUALITY_BAR.sales_smell_score &&
+    (post.fear_score ?? 100) <= THREADS_QUALITY_BAR.fear_score
+  );
+}
+
 export type NoteArticleType = "FREE" | "PAID";
 
-export type NoteArticleStage =
-  | "RESEARCH"
-  | "PLANNING"
-  | "WRITING"
-  | "READER_REVIEW"
-  | "CHIEF_EDIT"
-  | "FACT_CHECK"
-  | "SALES_EDIT"
-  | "DONE";
-
-export const NOTE_ARTICLE_STAGE_ORDER: NoteArticleStage[] = [
-  "RESEARCH",
-  "PLANNING",
-  "WRITING",
-  "READER_REVIEW",
-  "CHIEF_EDIT",
-  "FACT_CHECK",
-  "SALES_EDIT",
-  "DONE",
-];
-
-export const NOTE_ARTICLE_STAGE_LABELS: Record<NoteArticleStage, string> = {
-  RESEARCH: "Research Agent",
-  PLANNING: "企画編集Agent",
-  WRITING: "Writer Agent",
-  READER_REVIEW: "50代読者Agent",
-  CHIEF_EDIT: "辛口編集長Agent",
-  FACT_CHECK: "Fact Check Agent",
-  SALES_EDIT: "Sales Editor Agent",
-  DONE: "完了",
-};
-
+/** 統一Content Status(セクション20)。Service層(contentStatus.ts)以外からの直接変更は禁止。 */
 export type NoteArticleStatus =
   | "IDEA"
-  | "RESEARCHED"
+  | "STRATEGY"
+  | "OUTLINE"
   | "DRAFT"
-  | "AI_REVIEWED"
+  | "AI_REVIEW"
+  | "FACT_CHECK"
   | "WAITING_APPROVAL"
   | "APPROVED"
   | "PUBLISHED"
-  | "ANALYZED";
+  | "ANALYZED"
+  | "REJECTED";
+
+export const NOTE_ARTICLE_STATUS_ORDER: NoteArticleStatus[] = [
+  "STRATEGY",
+  "OUTLINE",
+  "DRAFT",
+  "AI_REVIEW",
+  "FACT_CHECK",
+  "WAITING_APPROVAL",
+  "APPROVED",
+  "PUBLISHED",
+];
+
+export const NOTE_ARTICLE_STATUS_LABELS: Record<NoteArticleStatus, string> = {
+  IDEA: "未着手",
+  STRATEGY: "Content Strategy",
+  OUTLINE: "Outline(承認待ち)",
+  DRAFT: "本文作成中",
+  AI_REVIEW: "AIレビュー中",
+  FACT_CHECK: "Fact Check中",
+  WAITING_APPROVAL: "承認待ち",
+  APPROVED: "承認済み",
+  PUBLISHED: "公開済み",
+  ANALYZED: "分析済み",
+  REJECTED: "却下",
+};
+
+export type CtaType = "FOLLOW" | "NEXT_ARTICLE" | "FREE_DIAGNOSIS" | "PAID_NOTE" | "PRODUCT" | "COMMENT";
+
+export const CTA_TYPE_LABELS: Record<CtaType, string> = {
+  FOLLOW: "フォロー",
+  NEXT_ARTICLE: "次の記事",
+  FREE_DIAGNOSIS: "無料診断",
+  PAID_NOTE: "有料note",
+  PRODUCT: "商品",
+  COMMENT: "コメント",
+};
+
+export interface TitleCandidate {
+  title: string;
+  type: "共感" | "疑問" | "告白" | "問題提起" | "ベネフィット";
+  click_score: number;
+  trust_score: number;
+  specificity_score: number;
+  sales_smell_score: number;
+}
+
+export interface PaidCandidateEvaluation {
+  problem_depth: number;
+  actionability: number;
+  repeat_value: number;
+  specificity: number;
+  transformation_value: number;
+  purchase_intent: number;
+  is_paid_candidate: boolean;
+  reasoning: string;
+}
 
 export interface NoteArticle {
   id: string;
   user_id: string;
   idea_id: string | null;
+  strategy_id: string | null;
   type: NoteArticleType;
   price: number | null;
   title: string;
+  title_candidates: TitleCandidate[];
+  lead: string | null;
+  reader_problem: string | null;
+  promise: string | null;
   body_markdown: string;
-  current_stage: NoteArticleStage;
+  cta_type: CtaType | null;
+  cta_text: string | null;
+  outline_approved_at: string | null;
   revision_count: number;
   quality_score: number | null;
   quality_below_threshold: boolean;
+  is_paid_candidate: boolean;
+  paid_candidate_evaluation: PaidCandidateEvaluation | null;
   status: NoteArticleStatus;
   published_at: string | null;
   note_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ------------------------------------------------------------------
+// Content Strategy(セクション2)
+// ------------------------------------------------------------------
+export interface ContentStrategy {
+  id: string;
+  user_id: string;
+  idea_id: string;
+  target_reader: string;
+  reader_situation: string;
+  surface_problem: string;
+  deep_problem: string;
+  desired_emotion: string;
+  desired_action: string;
+  main_message: string;
+  unique_angle: string;
+  content_goal: string;
+  free_or_paid: "FREE" | "PAID" | "BOTH";
+  cta_strategy: string;
+  threads_role: string;
+  free_note_role: string;
+  paid_note_role: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ------------------------------------------------------------------
+// Experience Library(セクション11): 架空体験防止のための本人実体験ストック
+// ------------------------------------------------------------------
+export type ExperienceConfidence = "VERIFIED_BY_USER" | "UNVERIFIED" | "NEEDS_REVIEW";
+
+export interface ExperienceLibraryItem {
+  id: string;
+  user_id: string;
+  title: string;
+  summary: string;
+  tags: string[];
+  confidence: ExperienceConfidence;
+  created_at: string;
+  updated_at: string;
+}
+
+// ------------------------------------------------------------------
+// Writing Profile / Samples(セクション10): Voice Engine
+// ------------------------------------------------------------------
+export interface WritingProfile {
+  id: string;
+  user_id: string;
+  preferred_tone: string;
+  sentence_length: "SHORT" | "MEDIUM" | "LONG";
+  humor_level: number;
+  directness: number;
+  emotional_level: number;
+  technical_level: number;
+  emoji_level: number;
+  line_break_style: "FREQUENT" | "MODERATE" | "MINIMAL";
+  ng_phrases: string[];
+  preferred_phrases: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WritingSample {
+  id: string;
+  user_id: string;
+  source_type: "THREADS_POST" | "NOTE_ARTICLE";
+  source_id: string;
+  excerpt: string;
+  approved_at: string;
+  created_at: string;
+}
+
+// ------------------------------------------------------------------
+// Article Sections(セクション9・21): Section単位のOutline/Draft/編集
+// ------------------------------------------------------------------
+export interface ArticleSectionKeyPoint {
+  point: string;
+}
+
+export interface ArticleSection {
+  id: string;
+  user_id: string;
+  article_id: string;
+  heading: string;
+  purpose: string | null;
+  key_points: string[];
+  evidence_required: boolean;
+  experience_required: boolean;
+  content: string;
+  source_ids: string[];
+  experience_ids: string[];
+  sort_order: number;
+  manual_edited: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// ------------------------------------------------------------------
+// Article Versions(セクション22): AIによる上書きから手動編集を守る
+// ------------------------------------------------------------------
+export interface ArticleVersion {
+  id: string;
+  user_id: string;
+  target_type: "NOTE_ARTICLE" | "THREADS_POST";
+  target_id: string;
+  version: number;
+  content: string;
+  created_by: "AI" | "USER";
+  reason: string | null;
+  created_at: string;
+}
+
+// ------------------------------------------------------------------
+// Fact Claims(セクション13)
+// ------------------------------------------------------------------
+export type FactClaimClassification = "VERIFIED" | "SUPPORTED" | "UNVERIFIED" | "OPINION" | "EXPERIENCE";
+
+export interface FactClaim {
+  id: string;
+  user_id: string;
+  article_id: string;
+  section_id: string | null;
+  claim: string;
+  classification: FactClaimClassification;
+  source_id: string | null;
+  confidence: number | null;
+  action_required: boolean;
+  created_at: string;
+}
+
+// ------------------------------------------------------------------
+// Content Funnel(セクション18)
+// ------------------------------------------------------------------
+export interface ContentFunnel {
+  id: string;
+  user_id: string;
+  idea_id: string;
+  threads_post_ids: string[];
+  free_note_id: string | null;
+  paid_note_id: string | null;
+  product_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -267,7 +497,15 @@ export type AgentType =
   | "FACT_CHECK_AGENT"
   | "SALES_EDITOR_AGENT"
   | "PRODUCT_SUGGESTER"
-  | "ANALYTICS_ADVISOR";
+  | "ANALYTICS_ADVISOR"
+  | "STRATEGY_EDITOR"
+  | "OUTLINE_GENERATOR"
+  | "TITLE_GENERATOR"
+  | "SECTION_WRITER"
+  | "FACT_CLAIM_EXTRACTOR"
+  | "HUMANITY_CHECKER"
+  | "PAID_CANDIDATE_EVALUATOR"
+  | "AI_SMELL_DETECTOR";
 
 export type AiReviewVerdict = "PASS" | "NEEDS_REVISION" | "FAIL";
 
@@ -343,7 +581,9 @@ export type AiJobType =
   | "IDEA_SCORE"
   | "THREADS_GENERATE"
   | "THREADS_TONE_ANALYZE"
+  | "THREADS_REWRITE"
   | "ARTICLE_ADVANCE"
+  | "PAID_CANDIDATE_EVALUATE"
   | "PRODUCT_SUGGEST"
   | "ANALYTICS_ADVISE";
 

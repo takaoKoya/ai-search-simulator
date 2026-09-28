@@ -5,8 +5,27 @@ import { redirect } from "next/navigation";
 import { requireGrowthOsUser } from "@/lib/growth-os/auth";
 import { createResearchItem, getResearchItemsByIds } from "@/lib/growth-os/db/research";
 import { createIdeaManually, updateIdeaStatus, getIdea } from "@/lib/growth-os/db/ideas";
-import { updateThreadsPostStatus } from "@/lib/growth-os/db/threads";
-import { createNoteArticle, getNoteArticle, publishNoteArticle } from "@/lib/growth-os/db/articles";
+import {
+  updateThreadsPostStatus,
+  applyManualThreadsEdit,
+  getThreadsPost,
+} from "@/lib/growth-os/db/threads";
+import {
+  createNoteArticle,
+  getNoteArticle,
+  publishNoteArticle,
+  transitionArticleStatus,
+} from "@/lib/growth-os/db/articles";
+import { approveOutlineAndStartDraft } from "@/lib/growth-os/pipeline/articlePipeline";
+import { getArticleSection, applyManualSectionEdit, assembleBodyMarkdown, listArticleSections } from "@/lib/growth-os/db/articleSections";
+import { updateArticleBody } from "@/lib/growth-os/db/articles";
+import { saveVersion, getVersion } from "@/lib/growth-os/db/articleVersions";
+import {
+  createExperienceLibraryItem,
+  updateExperienceConfidence,
+  deleteExperienceLibraryItem,
+} from "@/lib/growth-os/db/experienceLibrary";
+import { upsertWritingProfile, addWritingSample } from "@/lib/growth-os/db/writingProfile";
 import { enqueueJob, countPendingJobs } from "@/lib/growth-os/db/jobs";
 import { updateProductStatus } from "@/lib/growth-os/db/products";
 import { upsertContentMetric, listContentMetrics } from "@/lib/growth-os/db/metrics";
@@ -23,14 +42,18 @@ import {
   GROWTH_OS_CALENDAR_ROUTE,
   GROWTH_OS_ANALYTICS_ROUTE,
   GROWTH_OS_SETTINGS_ROUTE,
+  GROWTH_OS_APPROVAL_ROUTE,
+  GROWTH_OS_EXPERIENCE_ROUTE,
 } from "@/lib/routes";
 import type {
   CalendarItemType,
+  ExperienceConfidence,
   IdeaStatus,
   MetricContentType,
   ProductStatus,
   ResearchSourceType,
   ThreadsPostStatus,
+  WritingProfile,
 } from "@/lib/growth-os/types";
 
 type GrowthOsSupabase = Awaited<ReturnType<typeof requireGrowthOsUser>>["supabase"];
@@ -175,6 +198,18 @@ export async function createThreadsFromIdeaAction(id: string) {
   redirect(`${GROWTH_OS_THREADS_ROUTE}?idea=${id}`);
 }
 
+/**
+ * フェーズ3の統一エントリーポイント(セクション32)。「コンテンツを作成」1クリックで
+ * Content Strategy→Threads 5案→無料noteのOutlineまでを自動連鎖させ、Outline承認だけ人間を待つ。
+ */
+export async function createContentFromIdeaAction(id: string) {
+  const { supabase, userId } = await requireGrowthOsUser();
+  await assertUnderDailyJobLimit(supabase, userId);
+  await enqueueJob(supabase, userId, "THREADS_GENERATE", "IDEA", id);
+  revalidatePath(`${GROWTH_OS_IDEAS_ROUTE}/${id}`);
+  redirect(`${GROWTH_OS_IDEAS_ROUTE}/${id}/content`);
+}
+
 async function createNoteArticleFromIdea(id: string, type: "FREE" | "PAID") {
   const { supabase, userId } = await requireGrowthOsUser();
   await assertUnderDailyJobLimit(supabase, userId);
@@ -227,6 +262,38 @@ export async function markThreadsPostPublishedAction(id: string) {
   await setThreadsStatus(id, "PUBLISHED");
 }
 
+/** 個別Threads投稿のAI再生成(REGENERATE)。手動編集済みの投稿はガード側で弾かれる。 */
+export async function regenerateThreadsPostAction(id: string) {
+  const { supabase, userId } = await requireGrowthOsUser();
+  await assertUnderDailyJobLimit(supabase, userId);
+  const post = await getThreadsPost(supabase, userId, id);
+  if (!post) throw new Error("Threads post not found");
+  if (post.manual_edited) throw new Error("手動編集済みの投稿はAI再生成できません");
+
+  await enqueueJob(supabase, userId, "THREADS_REWRITE", "THREADS_POST", id);
+  revalidatePath(`${GROWTH_OS_THREADS_ROUTE}/${id}`);
+}
+
+/** 人間による本文の直接編集(EDIT)。以降このPostはAI再生成の対象から外れる。 */
+export async function manualEditThreadsPostAction(formData: FormData) {
+  const { supabase, userId } = await requireGrowthOsUser();
+  const id = String(formData.get("id"));
+  const body = String(formData.get("body") ?? "").trim();
+  if (!body) throw new Error("本文は必須です");
+
+  await saveVersion(supabase, userId, {
+    target_type: "THREADS_POST",
+    target_id: id,
+    content: body,
+    created_by: "USER",
+    reason: "手動編集",
+  });
+  await applyManualThreadsEdit(supabase, id, body);
+
+  revalidatePath(GROWTH_OS_THREADS_ROUTE);
+  revalidatePath(`${GROWTH_OS_THREADS_ROUTE}/${id}`);
+}
+
 // ---------------------------------------------------------------------------
 // note
 // ---------------------------------------------------------------------------
@@ -247,10 +314,21 @@ export async function retryArticlePipelineAction(id: string) {
 }
 
 export async function approveArticleAction(id: string) {
-  const { supabase } = await requireGrowthOsUser();
-  const { error } = await supabase.from("gos_note_articles").update({ status: "APPROVED" }).eq("id", id);
-  if (error) throw error;
+  const { supabase, userId } = await requireGrowthOsUser();
+  const article = await getNoteArticle(supabase, userId, id);
+  if (!article) throw new Error("Article not found");
+  await transitionArticleStatus(supabase, article, "APPROVED");
   revalidatePath(`${GROWTH_OS_NOTE_ROUTE}/${id}`);
+  revalidatePath(GROWTH_OS_APPROVAL_ROUTE);
+}
+
+export async function rejectArticleAction(id: string) {
+  const { supabase, userId } = await requireGrowthOsUser();
+  const article = await getNoteArticle(supabase, userId, id);
+  if (!article) throw new Error("Article not found");
+  await transitionArticleStatus(supabase, article, "REJECTED");
+  revalidatePath(`${GROWTH_OS_NOTE_ROUTE}/${id}`);
+  revalidatePath(GROWTH_OS_APPROVAL_ROUTE);
 }
 
 export async function publishArticleAction(formData: FormData) {
@@ -260,6 +338,98 @@ export async function publishArticleAction(formData: FormData) {
   await publishNoteArticle(supabase, id, noteUrl);
   revalidatePath(GROWTH_OS_NOTE_ROUTE);
   revalidatePath(`${GROWTH_OS_NOTE_ROUTE}/${id}`);
+}
+
+/** Outline承認(セクション7の必須人間承認ゲート)。OUTLINE→DRAFTへ遷移し、Section本文生成を自動連鎖させる。 */
+export async function approveOutlineAction(id: string) {
+  const { supabase, userId } = await requireGrowthOsUser();
+  await assertUnderDailyJobLimit(supabase, userId);
+  const article = await getNoteArticle(supabase, userId, id);
+  if (!article) throw new Error("Article not found");
+
+  await approveOutlineAndStartDraft(supabase, article);
+  await enqueueJob(supabase, userId, "ARTICLE_ADVANCE", "NOTE_ARTICLE", id);
+
+  revalidatePath(`${GROWTH_OS_NOTE_ROUTE}/${id}`);
+}
+
+/** Section本文の手動編集(セクション21)。以降このSectionはAI再生成の対象から外れる。 */
+export async function manualEditArticleSectionAction(formData: FormData) {
+  const { supabase, userId } = await requireGrowthOsUser();
+  const sectionId = String(formData.get("section_id"));
+  const content = String(formData.get("content") ?? "");
+
+  const section = await getArticleSection(supabase, userId, sectionId);
+  if (!section) throw new Error("Section not found");
+
+  await saveVersion(supabase, userId, {
+    target_type: "NOTE_ARTICLE",
+    target_id: section.article_id,
+    content,
+    created_by: "USER",
+    reason: `Section「${section.heading}」の手動編集`,
+  });
+  await applyManualSectionEdit(supabase, sectionId, content);
+
+  const sections = await listArticleSections(supabase, userId, section.article_id);
+  await updateArticleBody(supabase, section.article_id, assembleBodyMarkdown(sections));
+
+  revalidatePath(`${GROWTH_OS_NOTE_ROUTE}/${section.article_id}`);
+}
+
+/** 版の巻き戻し(セクション22)。戻す操作自体も新しい版として記録し、履歴を欠落させない。 */
+export async function restoreArticleVersionAction(versionId: string) {
+  const { supabase, userId } = await requireGrowthOsUser();
+  const version = await getVersion(supabase, userId, versionId);
+  if (!version) throw new Error("Version not found");
+
+  if (version.target_type === "NOTE_ARTICLE") {
+    await updateArticleBody(supabase, version.target_id, version.content);
+  } else {
+    await applyManualThreadsEdit(supabase, version.target_id, version.content);
+  }
+  await saveVersion(supabase, userId, {
+    target_type: version.target_type,
+    target_id: version.target_id,
+    content: version.content,
+    created_by: "USER",
+    reason: `version ${version.version} へ巻き戻し`,
+  });
+
+  if (version.target_type === "NOTE_ARTICLE") {
+    revalidatePath(`${GROWTH_OS_NOTE_ROUTE}/${version.target_id}`);
+  } else {
+    revalidatePath(`${GROWTH_OS_THREADS_ROUTE}/${version.target_id}`);
+  }
+}
+
+/** 有料note候補判定(セクション24)。無料note公開後に人間が任意で実行する。 */
+export async function evaluatePaidCandidateAction(articleId: string) {
+  const { supabase, userId } = await requireGrowthOsUser();
+  await assertUnderDailyJobLimit(supabase, userId);
+  await enqueueJob(supabase, userId, "PAID_CANDIDATE_EVALUATE", "NOTE_ARTICLE", articleId);
+  revalidatePath(`${GROWTH_OS_NOTE_ROUTE}/${articleId}`);
+}
+
+/** 無料note→有料note化。同じIdea/Content Strategyを引き継ぎ、STRATEGYから自動連鎖させる。 */
+export async function createPaidNoteFromFreeArticleAction(freeArticleId: string) {
+  const { supabase, userId } = await requireGrowthOsUser();
+  await assertUnderDailyJobLimit(supabase, userId);
+
+  const freeArticle = await getNoteArticle(supabase, userId, freeArticleId);
+  if (!freeArticle) throw new Error("Article not found");
+  if (!freeArticle.idea_id) throw new Error("Ideaに紐づかない記事は有料note化できません");
+
+  const paidArticle = await createNoteArticle(supabase, userId, {
+    idea_id: freeArticle.idea_id,
+    strategy_id: freeArticle.strategy_id,
+    type: "PAID",
+    title: freeArticle.title,
+  });
+  await enqueueJob(supabase, userId, "ARTICLE_ADVANCE", "NOTE_ARTICLE", paidArticle.id);
+
+  revalidatePath(GROWTH_OS_NOTE_ROUTE);
+  redirect(`${GROWTH_OS_NOTE_ROUTE}/${paidArticle.id}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -342,5 +512,85 @@ export async function updateDailyJobLimitAction(formData: FormData) {
   const { supabase, userId } = await requireGrowthOsUser();
   const limit = Number(formData.get("daily_ai_job_limit") ?? 30);
   await upsertSetting(supabase, userId, SETTINGS_KEYS.DAILY_AI_JOB_LIMIT, limit);
+  revalidatePath(GROWTH_OS_SETTINGS_ROUTE);
+}
+
+// ---------------------------------------------------------------------------
+// Experience Library(セクション11): 架空体験防止のための本人実体験ストック
+// ---------------------------------------------------------------------------
+
+export async function createExperienceAction(formData: FormData) {
+  const { supabase, userId } = await requireGrowthOsUser();
+  const title = String(formData.get("title") ?? "").trim();
+  const summary = String(formData.get("summary") ?? "").trim();
+  if (!title || !summary) throw new Error("タイトルと内容は必須です");
+
+  const tagsRaw = String(formData.get("tags") ?? "");
+  const tags = tagsRaw
+    .split(/[,、]/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+
+  await createExperienceLibraryItem(supabase, userId, {
+    title,
+    summary,
+    tags,
+    // 登録直後は「本人がこれから確認する」状態とし、確認が終わるまでAIには使わせない。
+    confidence: "NEEDS_REVIEW",
+  });
+  revalidatePath(GROWTH_OS_EXPERIENCE_ROUTE);
+}
+
+/** 「これは本当」「これは間違い」の本人確認(セクション11)。VERIFIED_BY_USERのみAIが使用可能になる。 */
+export async function setExperienceConfidenceAction(id: string, confidence: ExperienceConfidence) {
+  const { supabase } = await requireGrowthOsUser();
+  await updateExperienceConfidence(supabase, id, confidence);
+  revalidatePath(GROWTH_OS_EXPERIENCE_ROUTE);
+}
+
+export async function deleteExperienceAction(id: string) {
+  const { supabase } = await requireGrowthOsUser();
+  await deleteExperienceLibraryItem(supabase, id);
+  revalidatePath(GROWTH_OS_EXPERIENCE_ROUTE);
+}
+
+// ---------------------------------------------------------------------------
+// Writing Profile / Voice Engine(セクション10)
+// ---------------------------------------------------------------------------
+
+export async function updateWritingProfileAction(formData: FormData) {
+  const { supabase, userId } = await requireGrowthOsUser();
+
+  const parseList = (key: string) =>
+    String(formData.get(key) ?? "")
+      .split(/[,、\n]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+  await upsertWritingProfile(supabase, userId, {
+    preferred_tone: String(formData.get("preferred_tone") ?? ""),
+    sentence_length: (formData.get("sentence_length") as WritingProfile["sentence_length"]) || "MEDIUM",
+    humor_level: Number(formData.get("humor_level") ?? 20),
+    directness: Number(formData.get("directness") ?? 60),
+    emotional_level: Number(formData.get("emotional_level") ?? 60),
+    technical_level: Number(formData.get("technical_level") ?? 30),
+    emoji_level: Number(formData.get("emoji_level") ?? 0),
+    line_break_style: (formData.get("line_break_style") as WritingProfile["line_break_style"]) || "MODERATE",
+    ng_phrases: parseList("ng_phrases"),
+    preferred_phrases: parseList("preferred_phrases"),
+  });
+
+  revalidatePath(GROWTH_OS_SETTINGS_ROUTE);
+}
+
+/** 承認済みのThreads/note本文を「自分の声」のサンプルとしてマークする(セクション10)。 */
+export async function approveWritingSampleAction(formData: FormData) {
+  const { supabase, userId } = await requireGrowthOsUser();
+  const sourceType = String(formData.get("source_type")) as "THREADS_POST" | "NOTE_ARTICLE";
+  const sourceId = String(formData.get("source_id"));
+  const excerpt = String(formData.get("excerpt") ?? "").trim();
+  if (!excerpt) throw new Error("excerptは必須です");
+
+  await addWritingSample(supabase, userId, { source_type: sourceType, source_id: sourceId, excerpt });
   revalidatePath(GROWTH_OS_SETTINGS_ROUTE);
 }

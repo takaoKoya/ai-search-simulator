@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { LexicalSimilarityDetector, findMostSimilarIdea, isDuplicate, DUPLICATE_SCORE_THRESHOLD } from "./dedupe";
+import {
+  LexicalSimilarityDetector,
+  findMostSimilarIdea,
+  isDuplicate,
+  DUPLICATE_SCORE_THRESHOLD,
+  textSimilarity,
+  isContentDuplicate,
+  CONTENT_DUPLICATE_SCORE_THRESHOLD,
+} from "./dedupe";
 import type { IdeaSimilarityCandidate } from "./dedupe";
 
 const detector = new LexicalSimilarityDetector();
@@ -61,5 +69,26 @@ describe("isDuplicate", () => {
   it("閾値以上はtrue、未満はfalse", () => {
     expect(isDuplicate(DUPLICATE_SCORE_THRESHOLD)).toBe(true);
     expect(isDuplicate(DUPLICATE_SCORE_THRESHOLD - 0.01)).toBe(false);
+  });
+});
+
+describe("textSimilarity(セクション26: Threads/note本文の量産的な酷似を検出する)", () => {
+  it("ほぼ同一の本文は類似度が非常に高い", () => {
+    const a = "50代になって、会社に依存しない生き方を考え始めた人へ。まずは自分の経験を棚卸ししてみませんか。";
+    const b = "50代になって、会社に依存しない生き方を考え始めた人へ。まず自分の経験を棚卸ししてみませんか。";
+    expect(textSimilarity(a, b)).toBeGreaterThan(0.8);
+  });
+
+  it("全く異なる本文は類似度が低い", () => {
+    const a = "50代の転職市場について、最近の傾向をまとめました。";
+    const b = "新NISAの積立設定を今日から始める手順を解説します。";
+    expect(textSimilarity(a, b)).toBeLessThan(0.3);
+  });
+});
+
+describe("isContentDuplicate", () => {
+  it("閾値以上はtrue、未満はfalse", () => {
+    expect(isContentDuplicate(CONTENT_DUPLICATE_SCORE_THRESHOLD)).toBe(true);
+    expect(isContentDuplicate(CONTENT_DUPLICATE_SCORE_THRESHOLD - 0.01)).toBe(false);
   });
 });
