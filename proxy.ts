@@ -26,8 +26,8 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // config.matcher below already scopes this proxy to /home and /task,
-  // so every request reaching here is on a protected path.
+  // config.matcher below already scopes this proxy to protected paths
+  // (/home, /task, /os), so every request reaching here needs a session.
   if (!user) {
     return NextResponse.redirect(new URL(LOGIN_ROUTE, request.url));
   }
@@ -36,5 +36,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/home/:path*", "/task/:path*"],
+  matcher: ["/home/:path*", "/task/:path*", "/os/:path*"],
 };
