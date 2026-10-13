@@ -1,5 +1,6 @@
 import { messagingApi, type webhook } from "@line/bot-sdk";
 import { prisma } from "@/lib/db";
+import { scoreApplicant } from "@/lib/applicants/score";
 import { lineQuestionSchema } from "@/lib/jobs/schema";
 import { z } from "zod";
 import {
@@ -24,6 +25,42 @@ function getClient() {
   const channelAccessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
   if (!channelAccessToken) throw new Error("LINE_CHANNEL_ACCESS_TOKEN is not set");
   return (client ??= new messagingApi.MessagingApiClient({ channelAccessToken }));
+}
+
+type Outcome = { messages: Message[]; afterReply?: () => Promise<void> };
+
+/** プロフィール取得の失敗（ブロック済み・権限なし等）で応募フローを止めない。 */
+async function fetchProfile(userId: string): Promise<{ lineDisplayName?: string; linePictureUrl?: string }> {
+  try {
+    const profile = await getClient().getProfile(userId);
+    return { lineDisplayName: profile.displayName, linePictureUrl: profile.pictureUrl };
+  } catch (e) {
+    console.error("LINE getProfile failed", e);
+    return {};
+  }
+}
+
+async function scoreAndSave(applicantId: string): Promise<void> {
+  try {
+    const applicant = await prisma.applicant.findUniqueOrThrow({
+      where: { id: applicantId },
+      include: { job: true },
+    });
+    const questions = questionsSchema.parse(applicant.job.lineQuestions);
+    const result = await scoreApplicant({
+      job: applicant.job,
+      questions,
+      answers: z.array(z.string()).parse(applicant.answers),
+      interviewAt: applicant.interviewAt ?? new Date(),
+    });
+    await prisma.applicant.update({
+      where: { id: applicantId },
+      data: { score: result.score, evaluation: result.evaluation, status: result.status },
+    });
+  } catch (e) {
+    // status stays PENDING (set at completion) so a human picks it up
+    console.error("applicant scoring failed", applicantId, e);
+  }
 }
 
 async function replyJobSelection(): Promise<Message[]> {
@@ -58,7 +95,14 @@ async function startApplication(userId: string, jobId: string): Promise<Message[
   const applicant =
     existing ??
     (await prisma.applicant.create({
-      data: { jobId, lineUserId: userId, status: "SCREENING", step: 0, answers: [] },
+      data: {
+        jobId,
+        lineUserId: userId,
+        status: "SCREENING",
+        step: 0,
+        answers: [],
+        ...(await fetchProfile(userId)),
+      },
     }));
   return [promptFor(applicant.step, questions.data)];
 }
@@ -66,10 +110,10 @@ async function startApplication(userId: string, jobId: string): Promise<Message[
 async function continueApplication(
   applicant: NonNullable<Awaited<ReturnType<typeof findActiveApplicant>>>,
   event: webhook.MessageEvent | webhook.PostbackEvent,
-): Promise<Message[]> {
+): Promise<Outcome> {
   const questions = questionsSchema.safeParse(applicant.job.lineQuestions);
   if (!questions.success) {
-    return [{ type: "text", text: "この求人は現在応募を受け付けていません。" }];
+    return { messages: [{ type: "text", text: "この求人は現在応募を受け付けていません。" }] };
   }
   const answers = z.array(z.string()).catch([]).parse(applicant.answers);
   const q = questions.data;
@@ -88,12 +132,11 @@ async function continueApplication(
             where: { id: applicant.id, step: applicant.step },
             data: { step: next.step, answers: next.answers },
           });
-          if (count === 0) return [];
-          return [promptFor(next.step, q)];
+          return { messages: count === 0 ? [] : [promptFor(next.step, q)] };
         }
       }
     }
-    return [promptFor(applicant.step, q)];
+    return { messages: [promptFor(applicant.step, q)] };
   }
 
   // interview date
@@ -104,13 +147,15 @@ async function continueApplication(
     raw = event.message.text;
   }
   const date = raw ? parseInterviewDate(raw) : null;
-  if (!date) return [promptFor(INTERVIEW_STEP, q, raw !== undefined)];
+  if (!date) return { messages: [promptFor(INTERVIEW_STEP, q, raw !== undefined)] };
 
   const { count } = await prisma.applicant.updateMany({
     where: { id: applicant.id, step: INTERVIEW_STEP },
-    data: { interviewAt: date, step: DONE_STEP, status: "INTERVIEW_SCHEDULED" },
+    data: { interviewAt: date, step: DONE_STEP, status: "PENDING" },
   });
-  return count === 0 ? [] : [buildCompletion(date)];
+  if (count === 0) return { messages: [] };
+  // reply first (the reply token expires quickly), then score
+  return { messages: [buildCompletion(date)], afterReply: () => scoreAndSave(applicant.id) };
 }
 
 function findActiveApplicant(userId: string) {
@@ -127,18 +172,19 @@ async function handleEvent(event: webhook.Event): Promise<void> {
   const replyToken = event.replyToken;
   if (!userId || !replyToken) return;
 
-  let messages: Message[];
+  let outcome: Outcome;
   const data = event.type === "postback" ? parsePostbackData(event.postback.data) : null;
   if (data?.action === "job" && data.id) {
-    messages = await startApplication(userId, data.id);
+    outcome = { messages: await startApplication(userId, data.id) };
   } else {
     const active = await findActiveApplicant(userId);
-    messages = active ? await continueApplication(active, event) : await replyJobSelection();
+    outcome = active ? await continueApplication(active, event) : { messages: await replyJobSelection() };
   }
 
-  if (messages.length > 0) {
-    await getClient().replyMessage({ replyToken, messages });
+  if (outcome.messages.length > 0) {
+    await getClient().replyMessage({ replyToken, messages: outcome.messages });
   }
+  await outcome.afterReply?.();
 }
 
 export async function handleLineEvents(events: webhook.Event[]): Promise<void> {

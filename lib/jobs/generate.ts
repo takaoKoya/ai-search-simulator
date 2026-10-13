@@ -1,7 +1,5 @@
-import OpenAI from "openai";
+import { getOpenAI, MissingApiKeyError, OPENAI_MODEL } from "@/lib/openai";
 import { generatedJobSchema, type GeneratedJob } from "./schema";
-
-const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o";
 
 const SYSTEM_PROMPT = `あなたは日本の採用マーケティングの専門家です。
 ユーザーが入力したざっくりした求人条件から、以下を日本語で生成し、指定のJSON形式のみで返してください。
@@ -59,16 +57,17 @@ const JSON_SCHEMA = {
 
 export class GenerationError extends Error {}
 
-let client: OpenAI | undefined;
-
 export async function generateJobContent(text: string): Promise<GeneratedJob> {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new GenerationError("OPENAI_API_KEY が設定されていません");
+  let openai;
+  try {
+    openai = getOpenAI();
+  } catch (e) {
+    if (e instanceof MissingApiKeyError) throw new GenerationError(e.message);
+    throw e;
   }
-  client ??= new OpenAI();
 
-  const completion = await client.chat.completions.create({
-    model: MODEL,
+  const completion = await openai.chat.completions.create({
+    model: OPENAI_MODEL,
     temperature: 0.7,
     response_format: { type: "json_schema", json_schema: JSON_SCHEMA },
     messages: [

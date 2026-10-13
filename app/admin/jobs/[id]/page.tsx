@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { JobStatusControl } from "@/components/admin/JobStatusControl";
 import { Card } from "@/components/ui/card";
 import { prisma } from "@/lib/db";
-import { APPLICANT_STATUS_LABELS, formatDateTime, JOB_STATUS_LABELS, TARGET_LABELS } from "@/lib/jobs/labels";
+import { APPLICANT_STATUS_LABELS, APPLICANT_STATUS_STYLES, formatDateTime, JOB_STATUS_LABELS, TARGET_LABELS } from "@/lib/jobs/labels";
 import { generatedJobSchema } from "@/lib/jobs/schema";
 
 export const dynamic = "force-dynamic";
@@ -80,33 +80,59 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
         {job.applicants.length === 0 ? (
           <p className="mt-2 text-sm text-neutral-500">まだ応募者はいません。</p>
         ) : (
-          <div className="mt-2 overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="text-xs text-neutral-500">
-                <tr>
-                  <th className="py-2 pr-4">応募者</th>
-                  <th className="py-2 pr-4">ステータス</th>
-                  <th className="py-2 pr-4">回答</th>
-                  <th className="py-2 pr-4">面接希望</th>
-                  <th className="py-2">応募日</th>
-                </tr>
-              </thead>
-              <tbody>
-                {job.applicants.map((a) => {
-                  const answers = Array.isArray(a.answers) ? (a.answers as string[]) : [];
-                  return (
-                    <tr key={a.id} className="border-t border-neutral-200 align-top dark:border-neutral-800">
-                      <td className="py-2 pr-4">{a.displayName ?? `LINE…${a.lineUserId.slice(-6)}`}</td>
-                      <td className="py-2 pr-4">{APPLICANT_STATUS_LABELS[a.status]}</td>
-                      <td className="py-2 pr-4">{answers.join(" / ") || "—"}</td>
-                      <td className="whitespace-nowrap py-2 pr-4">{a.interviewAt ? formatDateTime(a.interviewAt) : "—"}</td>
-                      <td className="whitespace-nowrap py-2">{formatDateTime(a.createdAt)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <ul className="mt-2 flex flex-col divide-y divide-neutral-200 dark:divide-neutral-800">
+            {job.applicants.map((a) => {
+              const answers = Array.isArray(a.answers) ? (a.answers as string[]) : [];
+              return (
+                <li key={a.id} className="flex flex-col gap-2 py-4 text-sm">
+                  <div className="flex items-center gap-3">
+                    {a.linePictureUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- external LINE CDN avatar
+                      <img src={a.linePictureUrl} alt="" width={40} height={40} className="size-10 rounded-full object-cover" />
+                    ) : (
+                      <div aria-hidden className="size-10 rounded-full bg-neutral-200 dark:bg-neutral-800" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-medium">{a.lineDisplayName ?? `LINE…${a.lineUserId.slice(-6)}`}</p>
+                      <p className="text-xs text-neutral-500">応募日 {formatDateTime(a.createdAt)}</p>
+                    </div>
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${APPLICANT_STATUS_STYLES[a.status]}`}
+                    >
+                      {APPLICANT_STATUS_LABELS[a.status]}
+                    </span>
+                  </div>
+                  {a.score !== null && (
+                    <div className="flex items-center gap-3">
+                      <span className="w-16 text-xs text-neutral-500">スコア</span>
+                      <div
+                        role="meter"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={a.score}
+                        aria-label="スコア"
+                        className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800"
+                      >
+                        <div className="h-full bg-neutral-900 dark:bg-white" style={{ width: `${a.score}%` }} />
+                      </div>
+                      <span className="w-10 text-right font-semibold tabular-nums">{a.score}</span>
+                    </div>
+                  )}
+                  {a.evaluation && (
+                    <p className="rounded-lg bg-neutral-50 p-3 text-neutral-700 dark:bg-neutral-900 dark:text-neutral-300">
+                      <span className="mb-1 block text-xs font-semibold text-neutral-500">AI評価（参考）</span>
+                      {a.evaluation}
+                    </p>
+                  )}
+                  <p className="text-neutral-600 dark:text-neutral-400">
+                    回答: {answers.join(" / ") || "—"}
+                    <br />
+                    面接希望: {a.interviewAt ? formatDateTime(a.interviewAt) : "—"}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </Card>
     </div>
