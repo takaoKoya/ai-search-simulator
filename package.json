@@ -11,6 +11,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
     "@radix-ui/react-label": "^2.1.10",
     "@radix-ui/react-slider": "^1.4.1",
     "@supabase/ssr": "^0.12.3",
@@ -19,22 +21,27 @@
     "clsx": "^2.1.1",
     "lucide-react": "^1.22.0",
     "next": "16.2.9",
+    "openai": "^7.32.0",
+    "pg": "^8.23.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.9.0",
-    "tailwind-merge": "^3.6.0"
+    "tailwind-merge": "^3.6.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^20",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitest/ui": "^4.1.9",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
     "jsdom": "^29.1.1",
+    "prisma": "^7.10.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.9"

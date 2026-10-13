@@ -1,0 +1,104 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum TargetType {
+  ALBAIT
+  SPECIALIST
+  GENERAL
+}
+
+enum JobStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+}
+
+enum ChannelType {
+  INDEED
+  X
+  INSTAGRAM
+  LINE
+}
+
+enum ApplicantStatus {
+  NEW
+  SCREENING
+  PASSED
+  REJECTED
+  INTERVIEW_SCHEDULED
+  HIRED
+}
+
+model Job {
+  id            String      @id @default(cuid())
+  title         String
+  location      String
+  salary        String
+  conditions    String
+  rawInput      String
+  targetType    TargetType
+  snsPostText   Json
+  indeedText    String
+  lineQuestions Json
+  status        JobStatus   @default(DRAFT)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  applicants Applicant[]
+  channels   Channel[]
+  analytics  Analytics[]
+}
+
+model Channel {
+  id          String      @id @default(cuid())
+  jobId       String
+  type        ChannelType
+  content     String
+  publishedAt DateTime?
+  createdAt   DateTime    @default(now())
+
+  job       Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  analytics Analytics[]
+
+  @@index([jobId])
+}
+
+model Applicant {
+  id              String          @id @default(cuid())
+  jobId           String
+  lineUserId      String          @unique
+  displayName     String?
+  status          ApplicantStatus @default(NEW)
+  answers         Json?
+  score           Int?
+  interviewAt     DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+}
+
+model Analytics {
+  id          String   @id @default(cuid())
+  jobId       String
+  channelId   String?
+  date        DateTime @db.Date
+  impressions Int      @default(0)
+  clicks      Int      @default(0)
+  applies     Int      @default(0)
+  hires       Int      @default(0)
+
+  job     Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  channel Channel? @relation(fields: [channelId], references: [id], onDelete: SetNull)
+
+  @@unique([jobId, channelId, date])
+  @@index([jobId])
+}
