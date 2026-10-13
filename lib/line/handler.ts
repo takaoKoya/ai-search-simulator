@@ -5,6 +5,7 @@ import { parseApplyText } from "@/lib/analytics/channel";
 import { scoreAndSave as runScoring } from "@/lib/applicants/service";
 import type { ChannelType } from "@/lib/generated/prisma/client";
 import { getLineClient } from "./client";
+import { fetchLineProfile } from "./profile";
 import { lineQuestionSchema } from "@/lib/jobs/schema";
 import { z } from "zod";
 import {
@@ -29,8 +30,7 @@ type Outcome = { messages: Message[]; afterReply?: () => Promise<void> };
 /** プロフィール取得の失敗（ブロック済み・権限なし等）で応募フローを止めない。 */
 async function fetchProfile(userId: string): Promise<{ lineDisplayName?: string; linePictureUrl?: string }> {
   try {
-    const profile = await getLineClient().getProfile(userId);
-    return { lineDisplayName: profile.displayName, linePictureUrl: profile.pictureUrl };
+    return await fetchLineProfile(userId);
   } catch (e) {
     console.error("LINE getProfile failed", e);
     return {};
@@ -106,6 +106,14 @@ async function continueApplication(
   applicant: NonNullable<Awaited<ReturnType<typeof findActiveApplicant>>>,
   event: webhook.MessageEvent | webhook.PostbackEvent,
 ): Promise<Outcome> {
+  // Self-heal a profile that failed to load when the application started
+  // (pictureUrl is legitimately empty for some users, so only displayName is checked).
+  if (!applicant.lineDisplayName) {
+    const profile = await fetchProfile(applicant.lineUserId);
+    if (profile.lineDisplayName) {
+      await prisma.applicant.update({ where: { id: applicant.id }, data: profile }).catch(() => undefined);
+    }
+  }
   const questions = questionsSchema.safeParse(applicant.job.lineQuestions);
   if (!questions.success) {
     return { messages: [{ type: "text", text: "この求人は現在応募を受け付けていません。" }] };

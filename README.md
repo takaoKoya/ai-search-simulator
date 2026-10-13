@@ -1,36 +1,32 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 採用マーケティング MVP（Next.js）
 
-## Getting Started
+求人条件からAIが原稿・LINE質問を生成し、LINEで応募受付・スクリーニング・面接案内までを行う管理システム。
 
-First, run the development server:
+## セットアップ
 
 ```bash
+cp .env.example .env.local   # 値を設定（DATABASE_URL, OPENAI_API_KEY, LINE_*, Supabase など）
+npm install                  # postinstall で prisma generate
+npm run db:deploy            # マイグレーション適用（開発中は db:migrate）
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 主な画面・エンドポイント
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| パス | 内容 |
+| --- | --- |
+| `/admin/jobs/new` | 求人条件を入力してAI生成・保存 |
+| `/admin/jobs` / `/admin/jobs/[id]` | 求人一覧・詳細（応募者管理、面接案内、アナリティクス） |
+| `/admin/analytics` | 全求人のチャネル別アナリティクス（期間指定可） |
+| `/api/webhook/line` | LINE Webhook（署名検証あり）。LINE Developers に登録するURL |
+| `/r/{jobId}?utm_source=tiktok` | 計測リンク。PVを記録してLINEへ誘導 |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+`/admin/*` と `/api/{jobs,applicants,templates,analytics}/*` はSupabaseログインが必要です。
 
-## Learn More
+## 開発
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm test         # vitest
+npx tsc --noEmit # 型チェック
+npm run build
+```

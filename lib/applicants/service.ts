@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getLineClient } from "@/lib/line/client";
+import { fetchLineProfile } from "@/lib/line/profile";
 import { lineQuestionSchema } from "@/lib/jobs/schema";
 import { DONE_STEP, QUESTION_COUNT } from "@/lib/line/flow";
 import { renderTemplate } from "./notify";
@@ -77,5 +78,23 @@ export async function sendInterviewNotice(
       statusManual: true,
       ...(confirmedAt ? { interviewConfirmedAt: confirmedAt, status: "INTERVIEW_SCHEDULED" } : {}),
     },
+  });
+}
+
+/** Re-fetches displayName / pictureUrl from LINE and stores them. */
+export async function syncProfile(applicantId: string) {
+  const applicant = await prisma.applicant.findUnique({ where: { id: applicantId } });
+  if (!applicant) throw new ApplicantError("応募者が見つかりません", 404);
+
+  let profile;
+  try {
+    profile = await fetchLineProfile(applicant.lineUserId);
+  } catch (e) {
+    console.error("LINE profile sync failed", applicantId, e);
+    throw new ApplicantError("LINEプロフィールを取得できませんでした（ブロック・友だち解除の可能性があります）", 502);
+  }
+  return prisma.applicant.update({
+    where: { id: applicantId },
+    data: { lineDisplayName: profile.lineDisplayName, linePictureUrl: profile.linePictureUrl ?? null },
   });
 }

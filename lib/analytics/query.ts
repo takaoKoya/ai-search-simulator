@@ -1,13 +1,15 @@
 import { prisma } from "@/lib/db";
 import { CHANNEL_LABELS } from "./channel";
+import type { Period } from "./period";
 import { summarize } from "./summary";
 
-/** Per-channel funnel totals, optionally limited to one job. */
-export async function getChannelSummary(jobId?: string) {
+/** Per-channel funnel totals, optionally limited to one job and/or a date range. */
+export async function getChannelSummary(jobId?: string, period?: Period) {
+  const date = period && (period.start || period.end) ? { gte: period.start ?? undefined, lte: period.end ?? undefined } : undefined;
   const [grouped, channels] = await Promise.all([
     prisma.analytics.groupBy({
       by: ["channelId"],
-      where: jobId ? { jobId } : undefined,
+      where: { ...(jobId ? { jobId } : {}), ...(date ? { date } : {}) },
       _sum: { impressions: true, applies: true, interviews: true },
     }),
     prisma.channel.findMany({ where: jobId ? { jobId } : undefined, select: { id: true, type: true } }),

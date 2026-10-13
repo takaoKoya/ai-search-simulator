@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ApplicantActions } from "@/components/admin/ApplicantActions";
+import { PeriodFilter } from "@/components/admin/PeriodFilter";
 import { ChannelAnalytics } from "@/components/admin/ChannelAnalytics";
 import { JobStatusControl } from "@/components/admin/JobStatusControl";
 import { Card } from "@/components/ui/card";
+import { formatDateOnly, resolvePeriod } from "@/lib/analytics/period";
+import { firstParam } from "@/lib/utils";
 import { getChannelSummary } from "@/lib/analytics/query";
 import { DEFAULT_INTERVIEW_TEMPLATE, toJstInputValue } from "@/lib/applicants/notify";
 import { DONE_STEP } from "@/lib/line/flow";
@@ -15,15 +18,34 @@ export const dynamic = "force-dynamic";
 
 const SNS_LABELS = { x: "X (Twitter)", instagram: "Instagram", line: "LINE" } as const;
 
-export default async function JobDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+export default async function JobDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
+  const [{ id }, sp] = await Promise.all([params, searchParams]);
   const job = await prisma.job.findUnique({
     where: { id },
     include: { applicants: { orderBy: { createdAt: "desc" } } },
   });
   if (!job) notFound();
 
-  const summary = await getChannelSummary(job.id);
+  const resolved = resolvePeriod({
+    range: firstParam(sp.range),
+    startDate: firstParam(sp.startDate),
+    endDate: firstParam(sp.endDate),
+  });
+  const period = resolved.ok ? resolved.period : { range: "all" as const, start: null, end: null };
+  const [summary, templates] = await Promise.all([
+    getChannelSummary(job.id, period),
+    prisma.messageTemplate.findMany({
+      where: { OR: [{ jobId: null }, { jobId: job.id }] },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, name: true, body: true, jobId: true },
+    }),
+  ]);
   const base = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ?? "";
   const content = generatedJobSchema.pick({ snsPostText: true, lineQuestions: true }).safeParse(job);
 
@@ -82,7 +104,15 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
         </p>
       )}
 
-      <ChannelAnalytics title="チャネル別の流入・応募" summary={summary} />
+      <div className="flex flex-col gap-3">
+        <PeriodFilter range={period.range} startDate={formatDateOnly(period.start)} endDate={formatDateOnly(period.end)} />
+        {!resolved.ok && (
+          <p role="alert" className="text-sm text-red-600">
+            {resolved.error}（全期間で表示しています）
+          </p>
+        )}
+        <ChannelAnalytics title="チャネル別の流入・応募" summary={summary} />
+      </div>
 
       {job.status === "PUBLISHED" && (
         <Card className="p-4">
@@ -162,6 +192,9 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
                   </p>
                   <ApplicantActions
                     id={a.id}
+                    jobId={job.id}
+                    templates={templates}
+                    profileIncomplete={!a.lineDisplayName || !a.linePictureUrl}
                     status={a.status}
                     completed={a.step >= DONE_STEP}
                     defaultTemplate={DEFAULT_INTERVIEW_TEMPLATE}

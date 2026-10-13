@@ -14,8 +14,21 @@ const STATUS_OPTIONS: { value: Status; label: string }[] = [
   { value: "HIRED", label: "採用" },
 ];
 
+export interface SavedTemplate {
+  id: string;
+  name: string;
+  body: string;
+  /** null = shared by all jobs */
+  jobId: string | null;
+}
+
+const BUILTIN_ID = "__builtin__";
+
 interface Props {
   id: string;
+  jobId: string;
+  templates: SavedTemplate[];
+  profileIncomplete: boolean;
   status: Status;
   /** application finished (all questions + interview date answered) */
   completed: boolean;
@@ -37,13 +50,17 @@ async function call(url: string, method: string, body?: unknown): Promise<{ ok: 
   }
 }
 
-export function ApplicantActions({ id, status, completed, defaultTemplate, defaultConfirmedAt, notifiedAt }: Props) {
+export function ApplicantActions({ id, jobId, templates, profileIncomplete, status, completed, defaultTemplate, defaultConfirmedAt, notifiedAt }: Props) {
   const router = useRouter();
-  const [busy, setBusy] = useState<null | "status" | "rescore" | "notify">(null);
+  const [busy, setBusy] = useState<null | "status" | "rescore" | "notify" | "profile" | "template">(null);
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const [template, setTemplate] = useState(defaultTemplate);
   const [confirmedAt, setConfirmedAt] = useState(defaultConfirmedAt);
+  const [selectedId, setSelectedId] = useState(BUILTIN_ID);
+  const [saveName, setSaveName] = useState("");
+  const [saveShared, setSaveShared] = useState(false);
+  const selected = templates.find((t) => t.id === selectedId);
 
   const options = STATUS_OPTIONS.some((o) => o.value === status)
     ? STATUS_OPTIONS
@@ -63,6 +80,32 @@ export function ApplicantActions({ id, status, completed, defaultTemplate, defau
     const ok = await run("status", () => call(`/api/applicants/${id}`, "PATCH", { status: next }), "ステータスを更新しました");
     // Never push to a candidate silently: moving to 通過 only opens the guidance panel.
     if (ok && next === "PASSED") setPanelOpen(true);
+  }
+
+  function pickTemplate(templateId: string) {
+    setSelectedId(templateId);
+    const t = templates.find((x) => x.id === templateId);
+    setTemplate(t ? t.body : defaultTemplate);
+  }
+
+  async function saveNew() {
+    const ok = await run(
+      "template",
+      () => call("/api/templates", "POST", { name: saveName, body: template, jobId: saveShared ? null : jobId }),
+      "テンプレートを保存しました",
+    );
+    if (ok) setSaveName("");
+  }
+
+  async function overwrite() {
+    if (!selected) return;
+    await run("template", () => call(`/api/templates/${selected.id}`, "PATCH", { name: selected.name, body: template }), "テンプレートを上書き保存しました");
+  }
+
+  async function remove() {
+    if (!selected || !window.confirm(`テンプレート「${selected.name}」を削除します。よろしいですか？`)) return;
+    const ok = await run("template", () => call(`/api/templates/${selected.id}`, "DELETE"), "テンプレートを削除しました");
+    if (ok) pickTemplate(BUILTIN_ID);
   }
 
   async function sendNotice() {
@@ -110,6 +153,16 @@ export function ApplicantActions({ id, status, completed, defaultTemplate, defau
         >
           面接案内
         </Button>
+        {profileIncomplete && (
+          <Button
+            type="button"
+            disabled={busy !== null}
+            onClick={() => run("profile", () => call(`/api/applicants/${id}/sync-profile`, "POST"), "LINEプロフィールを更新しました")}
+            className="h-9 px-3 text-xs"
+          >
+            {busy === "profile" ? "取得中…" : "プロフィール再取得"}
+          </Button>
+        )}
         {notifiedAt && <span className="text-xs text-neutral-500">案内送信済 {notifiedAt}</span>}
       </div>
 
@@ -125,6 +178,22 @@ export function ApplicantActions({ id, status, completed, defaultTemplate, defau
             />
           </label>
           <label className="flex flex-col gap-1 text-xs text-neutral-500">
+            テンプレートを読み込む
+            <select
+              value={selectedId}
+              onChange={(e) => pickTemplate(e.target.value)}
+              className="h-9 w-fit max-w-full rounded-lg border border-neutral-300 bg-white px-2 text-sm text-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
+            >
+              <option value={BUILTIN_ID}>標準テンプレート</option>
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.jobId === null ? "【共通】" : "【この求人】"}
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-neutral-500">
             案内メッセージ（{"{{name}} {{job}} {{datetime}}"} が差し込まれます）
             <textarea
               value={template}
@@ -133,6 +202,34 @@ export function ApplicantActions({ id, status, completed, defaultTemplate, defau
               className="rounded-lg border border-neutral-300 bg-white p-2 text-sm text-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
             />
           </label>
+          <div className="flex flex-wrap items-end gap-2 border-t border-dashed border-neutral-300 pt-2 dark:border-neutral-700">
+            <label className="flex flex-col gap-1 text-xs text-neutral-500">
+              テンプレート名
+              <input
+                value={saveName}
+                maxLength={50}
+                onChange={(e) => setSaveName(e.target.value)}
+                className="h-9 rounded-lg border border-neutral-300 bg-white px-2 text-sm text-neutral-900 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-100"
+              />
+            </label>
+            <label className="flex h-9 items-center gap-1 text-xs text-neutral-500">
+              <input type="checkbox" checked={saveShared} onChange={(e) => setSaveShared(e.target.checked)} />
+              全求人で共通
+            </label>
+            <Button type="button" onClick={saveNew} disabled={busy !== null || !saveName.trim() || !template.trim()} className="h-9 px-3 text-xs">
+              新規保存
+            </Button>
+            {selected && (
+              <>
+                <Button type="button" onClick={overwrite} disabled={busy !== null || !template.trim()} className="h-9 px-3 text-xs">
+                  「{selected.name}」を上書き
+                </Button>
+                <Button type="button" onClick={remove} disabled={busy !== null} className="h-9 px-3 text-xs">
+                  削除
+                </Button>
+              </>
+            )}
+          </div>
           <Button
             type="button"
             onClick={sendNotice}
