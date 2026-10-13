@@ -7,6 +7,7 @@
 ```bash
 cp .env.example .env.local   # 値を設定（DATABASE_URL, OPENAI_API_KEY, LINE_*, Supabase など）
 npm install                  # postinstall で prisma generate
+npm run env:check            # 必須の環境変数を検証（不足・不正なら exit 1）
 npm run db:deploy            # マイグレーション適用（開発中は db:migrate）
 npm run dev
 ```
