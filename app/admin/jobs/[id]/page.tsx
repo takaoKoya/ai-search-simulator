@@ -1,7 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { ApplicantActions } from "@/components/admin/ApplicantActions";
+import { ChannelAnalytics } from "@/components/admin/ChannelAnalytics";
 import { JobStatusControl } from "@/components/admin/JobStatusControl";
 import { Card } from "@/components/ui/card";
+import { getChannelSummary } from "@/lib/analytics/query";
+import { DEFAULT_INTERVIEW_TEMPLATE, toJstInputValue } from "@/lib/applicants/notify";
+import { DONE_STEP } from "@/lib/line/flow";
 import { prisma } from "@/lib/db";
 import { APPLICANT_STATUS_LABELS, APPLICANT_STATUS_STYLES, formatDateTime, JOB_STATUS_LABELS, TARGET_LABELS } from "@/lib/jobs/labels";
 import { generatedJobSchema } from "@/lib/jobs/schema";
@@ -18,6 +23,8 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
   });
   if (!job) notFound();
 
+  const summary = await getChannelSummary(job.id);
+  const base = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ?? "";
   const content = generatedJobSchema.pick({ snsPostText: true, lineQuestions: true }).safeParse(job);
 
   return (
@@ -75,6 +82,24 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
         </p>
       )}
 
+      <ChannelAnalytics title="チャネル別の流入・応募" summary={summary} />
+
+      {job.status === "PUBLISHED" && (
+        <Card className="p-4">
+          <h2 className="text-sm font-semibold text-neutral-500">計測リンク</h2>
+          <p className="mt-1 text-xs text-neutral-500">
+            各媒体にこのリンクを掲載すると、PV・応募がチャネル別に集計されます（utm_source: line / tiktok / indeed / x / instagram）。
+          </p>
+          <ul className="mt-2 flex flex-col gap-1 text-xs">
+            {["line", "tiktok", "indeed", "x", "instagram"].map((src) => (
+              <li key={src} className="break-all font-mono">
+                {`${base}/r/${job.id}?utm_source=${src}`}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
       <Card className="p-4">
         <h2 className="text-sm font-semibold text-neutral-500">応募者（{job.applicants.length}）</h2>
         {job.applicants.length === 0 ? (
@@ -128,7 +153,21 @@ export default async function JobDetailPage({ params }: { params: Promise<{ id: 
                     回答: {answers.join(" / ") || "—"}
                     <br />
                     面接希望: {a.interviewAt ? formatDateTime(a.interviewAt) : "—"}
+                    {a.interviewConfirmedAt && (
+                      <>
+                        <br />
+                        面接確定: {formatDateTime(a.interviewConfirmedAt)}
+                      </>
+                    )}
                   </p>
+                  <ApplicantActions
+                    id={a.id}
+                    status={a.status}
+                    completed={a.step >= DONE_STEP}
+                    defaultTemplate={DEFAULT_INTERVIEW_TEMPLATE}
+                    defaultConfirmedAt={toJstInputValue(a.interviewConfirmedAt ?? a.interviewAt)}
+                    notifiedAt={a.notifiedAt ? formatDateTime(a.notifiedAt) : null}
+                  />
                 </li>
               );
             })}

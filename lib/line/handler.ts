@@ -1,6 +1,10 @@
-import { messagingApi, type webhook } from "@line/bot-sdk";
+import type { messagingApi, webhook } from "@line/bot-sdk";
 import { prisma } from "@/lib/db";
-import { scoreApplicant } from "@/lib/applicants/score";
+import { ensureChannel, recordEventSafe } from "@/lib/analytics/record";
+import { parseApplyText } from "@/lib/analytics/channel";
+import { scoreAndSave as runScoring } from "@/lib/applicants/service";
+import type { ChannelType } from "@/lib/generated/prisma/client";
+import { getLineClient } from "./client";
 import { lineQuestionSchema } from "@/lib/jobs/schema";
 import { z } from "zod";
 import {
@@ -20,19 +24,12 @@ type Message = messagingApi.Message;
 
 const questionsSchema = z.array(lineQuestionSchema).length(QUESTION_COUNT);
 
-let client: messagingApi.MessagingApiClient | undefined;
-function getClient() {
-  const channelAccessToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-  if (!channelAccessToken) throw new Error("LINE_CHANNEL_ACCESS_TOKEN is not set");
-  return (client ??= new messagingApi.MessagingApiClient({ channelAccessToken }));
-}
-
 type Outcome = { messages: Message[]; afterReply?: () => Promise<void> };
 
 /** プロフィール取得の失敗（ブロック済み・権限なし等）で応募フローを止めない。 */
 async function fetchProfile(userId: string): Promise<{ lineDisplayName?: string; linePictureUrl?: string }> {
   try {
-    const profile = await getClient().getProfile(userId);
+    const profile = await getLineClient().getProfile(userId);
     return { lineDisplayName: profile.displayName, linePictureUrl: profile.pictureUrl };
   } catch (e) {
     console.error("LINE getProfile failed", e);
@@ -42,21 +39,7 @@ async function fetchProfile(userId: string): Promise<{ lineDisplayName?: string;
 
 async function scoreAndSave(applicantId: string): Promise<void> {
   try {
-    const applicant = await prisma.applicant.findUniqueOrThrow({
-      where: { id: applicantId },
-      include: { job: true },
-    });
-    const questions = questionsSchema.parse(applicant.job.lineQuestions);
-    const result = await scoreApplicant({
-      job: applicant.job,
-      questions,
-      answers: z.array(z.string()).parse(applicant.answers),
-      interviewAt: applicant.interviewAt ?? new Date(),
-    });
-    await prisma.applicant.update({
-      where: { id: applicantId },
-      data: { score: result.score, evaluation: result.evaluation, status: result.status },
-    });
+    await runScoring(applicantId);
   } catch (e) {
     // status stays PENDING (set at completion) so a human picks it up
     console.error("applicant scoring failed", applicantId, e);
@@ -78,7 +61,11 @@ function promptFor(step: number, questions: z.infer<typeof questionsSchema>, ret
   return step < QUESTION_COUNT ? buildQuestion(questions, step) : buildInterviewPrompt(retry);
 }
 
-async function startApplication(userId: string, jobId: string): Promise<Message[]> {
+async function startApplication(
+  userId: string,
+  jobId: string,
+  channelType: ChannelType = "DIRECT",
+): Promise<Message[]> {
   const job = await prisma.job.findFirst({ where: { id: jobId, status: "PUBLISHED" } });
   if (!job) return replyJobSelection();
   const questions = questionsSchema.safeParse(job.lineQuestions);
@@ -92,11 +79,18 @@ async function startApplication(userId: string, jobId: string): Promise<Message[
   if (existing && existing.step >= DONE_STEP) {
     return [{ type: "text", text: "この求人にはすでにご応募いただいています。" }];
   }
+  let created = false;
+  let channelId: string | undefined;
+  if (!existing) {
+    channelId = (await ensureChannel(jobId, channelType)).id;
+    created = true;
+  }
   const applicant =
     existing ??
     (await prisma.applicant.create({
       data: {
         jobId,
+        channelId,
         lineUserId: userId,
         status: "SCREENING",
         step: 0,
@@ -104,6 +98,7 @@ async function startApplication(userId: string, jobId: string): Promise<Message[
         ...(await fetchProfile(userId)),
       },
     }));
+  if (created && channelId) await recordEventSafe(jobId, channelId, "applies");
   return [promptFor(applicant.step, questions.data)];
 }
 
@@ -155,7 +150,14 @@ async function continueApplication(
   });
   if (count === 0) return { messages: [] };
   // reply first (the reply token expires quickly), then score
-  return { messages: [buildCompletion(date)], afterReply: () => scoreAndSave(applicant.id) };
+  return {
+    messages: [buildCompletion(date)],
+    afterReply: async () => {
+      const channelId = applicant.channelId ?? (await ensureChannel(applicant.jobId, "DIRECT")).id;
+      await recordEventSafe(applicant.jobId, channelId, "interviews");
+      await scoreAndSave(applicant.id);
+    },
+  };
 }
 
 function findActiveApplicant(userId: string) {
@@ -174,15 +176,19 @@ async function handleEvent(event: webhook.Event): Promise<void> {
 
   let outcome: Outcome;
   const data = event.type === "postback" ? parsePostbackData(event.postback.data) : null;
+  const applyText =
+    event.type === "message" && event.message.type === "text" ? parseApplyText(event.message.text) : null;
   if (data?.action === "job" && data.id) {
     outcome = { messages: await startApplication(userId, data.id) };
+  } else if (applyText) {
+    outcome = { messages: await startApplication(userId, applyText.jobId, applyText.channel) };
   } else {
     const active = await findActiveApplicant(userId);
     outcome = active ? await continueApplication(active, event) : { messages: await replyJobSelection() };
   }
 
   if (outcome.messages.length > 0) {
-    await getClient().replyMessage({ replyToken, messages: outcome.messages });
+    await getLineClient().replyMessage({ replyToken, messages: outcome.messages });
   }
   await outcome.afterReply?.();
 }

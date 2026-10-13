@@ -40,5 +40,5 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   // /api/webhook/line is intentionally excluded: LINE authenticates via signature.
-  matcher: ["/home/:path*", "/task/:path*", "/admin/:path*", "/api/jobs/:path*"],
+  matcher: ["/home/:path*", "/task/:path*", "/admin/:path*", "/api/jobs/:path*", "/api/applicants/:path*"],
 };

@@ -15,9 +15,14 @@ export default async function JobsPage() {
     <div className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-8">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">求人一覧</h1>
-        <Link href="/admin/jobs/new" className={buttonVariants()}>
-          新規作成
-        </Link>
+        <div className="flex gap-2">
+          <Link href="/admin/analytics" className={buttonVariants()}>
+            アナリティクス
+          </Link>
+          <Link href="/admin/jobs/new" className={buttonVariants()}>
+            新規作成
+          </Link>
+        </div>
       </div>
       {jobs.length === 0 ? (
         <p className="text-sm text-neutral-500">保存された求人はまだありません。</p>

@@ -24,6 +24,8 @@ enum ChannelType {
   X
   INSTAGRAM
   LINE
+  TIKTOK
+  DIRECT
 }
 
 enum ApplicantStatus {
@@ -37,7 +39,7 @@ enum ApplicantStatus {
 }
 
 model Job {
-  id            String      @id @default(cuid())
+  id            String     @id @default(cuid())
   title         String
   location      String
   salary        String
@@ -47,9 +49,9 @@ model Job {
   snsPostText   Json
   indeedText    String
   lineQuestions Json
-  status        JobStatus   @default(DRAFT)
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  status        JobStatus  @default(DRAFT)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
   applicants Applicant[]
   channels   Channel[]
@@ -60,34 +62,42 @@ model Channel {
   id          String      @id @default(cuid())
   jobId       String
   type        ChannelType
-  content     String
+  content     String      @default("")
   publishedAt DateTime?
   createdAt   DateTime    @default(now())
 
-  job       Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  analytics Analytics[]
+  job        Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  analytics  Analytics[]
+  applicants Applicant[]
 
+  @@unique([jobId, type])
   @@index([jobId])
 }
 
 model Applicant {
-  id              String          @id @default(cuid())
-  jobId           String
-  lineUserId      String
-  lineDisplayName String?
-  linePictureUrl  String?
-  status          ApplicantStatus @default(NEW)
-  step            Int             @default(0)
-  answers         Json?
-  score           Int?
-  evaluation      String?
-  interviewAt     DateTime?
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  id                   String          @id @default(cuid())
+  jobId                String
+  channelId            String?
+  lineUserId           String
+  lineDisplayName      String?
+  linePictureUrl       String?
+  status               ApplicantStatus @default(NEW)
+  step                 Int             @default(0)
+  answers              Json?
+  score                Int?
+  evaluation           String?
+  statusManual         Boolean         @default(false)
+  interviewAt          DateTime?
+  interviewConfirmedAt DateTime?
+  notifiedAt           DateTime?
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
 
-  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job     Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  channel Channel? @relation(fields: [channelId], references: [id], onDelete: SetNull)
 
   @@unique([jobId, lineUserId])
+  @@index([channelId])
   @@index([lineUserId])
   @@index([jobId])
 }
@@ -95,15 +105,16 @@ model Applicant {
 model Analytics {
   id          String   @id @default(cuid())
   jobId       String
-  channelId   String?
+  // Required: untracked traffic goes to the job's DIRECT channel, so the
+  // unique key below is never defeated by NULL != NULL in Postgres.
+  channelId   String
   date        DateTime @db.Date
   impressions Int      @default(0)
-  clicks      Int      @default(0)
   applies     Int      @default(0)
-  hires       Int      @default(0)
+  interviews  Int      @default(0)
 
-  job     Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  channel Channel? @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  job     Job     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
 
   @@unique([jobId, channelId, date])
   @@index([jobId])
