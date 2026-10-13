@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -18,11 +19,14 @@ export function JobGenerator() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<GeneratedJob | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [savedId, setSavedId] = useState<string | null>(null);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setSavedId(null);
     try {
       const res = await fetch("/api/jobs/generate", {
         method: "POST",
@@ -37,6 +41,26 @@ export function JobGenerator() {
       setError(err instanceof Error ? err.message : "生成に失敗しました");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function onSave() {
+    if (!result) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rawInput: text, job: result }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "保存に失敗しました");
+      setSavedId(data.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存に失敗しました");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -68,6 +92,17 @@ export function JobGenerator() {
 
       {result && (
         <div className="flex flex-col gap-4">
+          <div className="flex items-center gap-3">
+            {savedId ? (
+              <Link href={`/admin/jobs/${savedId}`} className="text-sm font-medium underline">
+                保存しました。求人詳細を開く →
+              </Link>
+            ) : (
+              <Button onClick={onSave} disabled={saving}>
+                {saving ? "保存中…" : "この内容で保存する"}
+              </Button>
+            )}
+          </div>
           <Card className="p-4">
             <h2 className="text-sm font-semibold text-neutral-500">判定されたターゲット層</h2>
             <p className="mt-1 text-lg font-bold">{TARGET_LABELS[result.targetType]}</p>

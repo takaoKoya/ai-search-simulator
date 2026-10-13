@@ -6,6 +6,7 @@ const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o";
 const SYSTEM_PROMPT = `あなたは日本の採用マーケティングの専門家です。
 ユーザーが入力したざっくりした求人条件から、以下を日本語で生成し、指定のJSON形式のみで返してください。
 
+- title / location / salary / conditions: 入力から抽出した職種名・勤務地・給与・その他条件（不明な項目は空文字）
 - targetType: ターゲット層の判定。
   ALBAIT=アルバイト・パート・短期/単発 / SPECIALIST=専門職・有資格者・エンジニア・医療介護など / GENERAL=上記以外の一般的な正社員・契約社員
 - snsPostText: x(140字以内・ハッシュタグ付き) / instagram(親しみやすい文体・ハッシュタグ多め) / line(友だち向けの短い案内)。ターゲットに響くトーンにする
@@ -20,8 +21,12 @@ const JSON_SCHEMA = {
   schema: {
     type: "object",
     additionalProperties: false,
-    required: ["targetType", "snsPostText", "indeedText", "lineQuestions"],
+    required: ["title", "location", "salary", "conditions", "targetType", "snsPostText", "indeedText", "lineQuestions"],
     properties: {
+      title: { type: "string" },
+      location: { type: "string" },
+      salary: { type: "string" },
+      conditions: { type: "string" },
       targetType: { type: "string", enum: ["ALBAIT", "SPECIALIST", "GENERAL"] },
       snsPostText: {
         type: "object",

@@ -12,7 +12,13 @@ export const lineQuestionSchema = z.object({
   options: z.array(z.string().min(1)).min(2).max(4),
 });
 
+export type LineQuestion = z.infer<typeof lineQuestionSchema>;
+
 export const generatedJobSchema = z.object({
+  title: z.string().min(1),
+  location: z.string(),
+  salary: z.string(),
+  conditions: z.string(),
   targetType: z.enum(TARGET_TYPES),
   snsPostText: z.object({
     x: z.string().min(1),
@@ -23,3 +29,9 @@ export const generatedJobSchema = z.object({
   lineQuestions: z.array(lineQuestionSchema).length(3),
 });
 export type GeneratedJob = z.infer<typeof generatedJobSchema>;
+
+export const saveJobInputSchema = z.object({
+  rawInput: z.string().trim().min(1).max(4000),
+  job: generatedJobSchema,
+});
+export type SaveJobInput = z.infer<typeof saveJobInputSchema>;

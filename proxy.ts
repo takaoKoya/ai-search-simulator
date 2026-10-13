@@ -26,9 +26,12 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // config.matcher below already scopes this proxy to /home and /task,
+  // config.matcher below already scopes this proxy to the protected paths,
   // so every request reaching here is on a protected path.
   if (!user) {
+    if (request.nextUrl.pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     return NextResponse.redirect(new URL(LOGIN_ROUTE, request.url));
   }
 
@@ -36,5 +39,6 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/home/:path*", "/task/:path*"],
+  // /api/webhook/line is intentionally excluded: LINE authenticates via signature.
+  matcher: ["/home/:path*", "/task/:path*", "/admin/:path*", "/api/jobs/:path*"],
 };

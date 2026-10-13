@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { generatedJobSchema, generateJobInputSchema } from "./schema";
 
 const valid = {
+  title: "カフェスタッフ",
+  location: "渋谷",
+  salary: "時給1200円",
+  conditions: "未経験OK",
   targetType: "ALBAIT",
   snsPostText: { x: "x", instagram: "i", line: "l" },
   indeedText: "【仕事内容】",

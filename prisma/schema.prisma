@@ -72,9 +72,10 @@ model Channel {
 model Applicant {
   id              String          @id @default(cuid())
   jobId           String
-  lineUserId      String          @unique
+  lineUserId      String
   displayName     String?
   status          ApplicantStatus @default(NEW)
+  step            Int             @default(0)
   answers         Json?
   score           Int?
   interviewAt     DateTime?
@@ -83,6 +84,8 @@ model Applicant {
 
   job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
+  @@unique([jobId, lineUserId])
+  @@index([lineUserId])
   @@index([jobId])
 }
 
